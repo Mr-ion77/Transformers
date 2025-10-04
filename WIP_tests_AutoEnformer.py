@@ -17,8 +17,8 @@ device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
 
 B = 256
-N1 = 1  # Number of epochs
-N2 = 1  # Number of epochs for the second step
+N1 = 150  # Number of epochs
+N2 = 150  # Number of epochs for the second step
 
 # Hyperparams
 p1 = {
@@ -54,7 +54,7 @@ if __name__ == "__main__":
         channels_last = False           # Set to True if last dimension of datasets tensors match channels dimension
         RepeatAutoencoder = False       # Set to True if you want to train the autoencoder each time for more variability. For a better performance and faster training set to False.
         SendToTelegramBool = True
-        NExperiments = 2
+        NExperiments = 20
 
         
         csv_path = '../QTransformer_Results_and_Datasets/autoenformer_results/current_results/results_grid_search.csv'
