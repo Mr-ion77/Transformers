@@ -7,16 +7,18 @@ from mi_quantum.quantum.quanvolution import QuantumConv2D
 import matplotlib.pyplot as plt
 import os, sys, json
 from tqdm import tqdm
+
 # Config
 
 sys.path.append(str(Path(__file__).resolve().parent.parent))
+from TelegramBot import SendToTelegram
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
 
 B = 256
-N1 = 150  # Number of epochs
-N2 = 150  # Number of epochs for the second step
+N1 = 1  # Number of epochs
+N2 = 1  # Number of epochs for the second step
 
 # Hyperparams
 p1 = {
@@ -34,7 +36,7 @@ p2 = {
 if __name__ == "__main__":
     try:
         # Save dictionary with all the hyperparameters and results in a json file
-
+        progress = 0
         os.makedirs('../QTransformer_Results_and_Datasets/autoenformer_results/current_results', exist_ok = True)
 
         with open('../QTransformer_Results_and_Datasets/autoenformer_results/current_results/hyperparameters.json', 'w') as f:
@@ -52,7 +54,7 @@ if __name__ == "__main__":
         channels_last = False           # Set to True if last dimension of datasets tensors match channels dimension
         RepeatAutoencoder = False       # Set to True if you want to train the autoencoder each time for more variability. For a better performance and faster training set to False.
         SendToTelegramBool = True
-        NExperiments = 20
+        NExperiments = 2
 
         
         csv_path = '../QTransformer_Results_and_Datasets/autoenformer_results/current_results/results_grid_search.csv'
@@ -63,8 +65,11 @@ if __name__ == "__main__":
         q_config = {'none', 'patchwise', 'quanvolution'}
         progress_levels = [0, 25, 50, 75, 100]
         # Grid search loop
+        if SendToTelegramBool:
+                SendToTelegram(progress = 0)   
+
         for idx in range(NExperiments):
-            progress = int( 100* idx//NExperiments )
+            progress = int( 100* (idx+1)//NExperiments )
             if SendToTelegramBool and progress in progress_levels:
                 SendToTelegram(progress = progress)                
 
@@ -252,10 +257,9 @@ if __name__ == "__main__":
                     plt.savefig('../QTransformer_Results_and_Datasets/autoenformer_results/current_results/auc_boxplot.png')
 
         if SendToTelegramBool:
-            from TelegramBot import SendToTelegram
             SendToTelegram(csv_file = "../QTransformer_Results_and_Datasets/autoenformer_results/current_results/results_grid_search.csv", columns = ['lr', 'q_config', 'test_auc'])
 
     except Exception as e:
-        from TelegramBot import SendToTelegram
-        SendToTelegram(success=False, error_message=str(e))
+         SendToTelegram(progress = progress, error_message=str(e))
+         print(str(e))
 
