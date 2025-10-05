@@ -24,7 +24,7 @@ N2 = 150  # Number of epochs for the second step
 p1 = {
     'learning_rate': 5e-3, 'hidden_size': 48, 'dropout': {'embedding_attn': 0.225, 'after_attn': 0.225, 'feedforward': 0.225, 'embedding_pos': 0.225},
     'num_head': 4, 'Attention_N' : 2, 'num_transf': 1, 'mlp_size': 9, 'patch_size': 4, 'weight_decay': 1e-7, 'attention_selection': 'none', 'entangle': True,
-    'paralel' : 2 ,'connectivity': 'king', 'RD': 1, 'patience': -1, 'scheduler_factor': 0.999, 'q_stride': 1 , 'RBF_similarity': 'none'  # No early stopping
+    'paralel' : 2 ,'connectivity': 'chain', 'RD': 1, 'patience': -1, 'scheduler_factor': 0.999, 'q_stride': 1 , 'RBF_similarity': 'none'  # No early stopping
 }
 
 p2 = {
@@ -126,7 +126,7 @@ if __name__ == "__main__":
                         QuantumLayer = qpctorch.quantum.pennylane_backend.QuantumLayer(num_qubits = p1['mlp_size'], entangle = p1['entangle'], graph = p1['connectivity'])
                     if QuanvBool:
                         MoLatentDatasetsTensors = []
-                        Quanvolution = QuantumConv2D(patch_size=3, stride=1, padding=1, channels_out = [4], ancilla = 0, graph= 'king')
+                        Quanvolution = QuantumConv2D(patch_size=3, stride=1, padding=1, channels_out = [4], ancilla = 0, graph= p1['connectivity'])
 
                     print(f'Quantum configuration is {q_config} ')
                     
