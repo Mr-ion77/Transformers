@@ -191,7 +191,7 @@ class MultiheadSelfAttention(nn.Module):
             x = x[:,1:,:]
 
         q, k, v = [
-            proj(x).reshape(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+            proj(x).reshape(batch_size, seq_len - self.special_cls, self.num_heads, self.head_dim).transpose(1, 2)
             for proj, x in zip([self.q_proj, self.k_proj, self.v_proj], [x, x, x])
         ]
 
@@ -199,11 +199,14 @@ class MultiheadSelfAttention(nn.Module):
         q_norm2 = (q.float()**2).sum(dim = -1, keepdim = True).clamp(min=1e-5)
 
         if self.special_cls:
-            c = self.cls_proj(cls_token).reshape(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+            c = self.cls_proj(cls_token).reshape(batch_size, 1, self.num_heads, self.head_dim).transpose(1, 2)
             cq_dot = c @ q.transpose(-2, -1)
-            c_norm =  ((c.float()**2).sum(dim = -1, keepdim = True).clamp(min=1e-5))
+            c_norm2 =  ((c.float()**2).sum(dim = -1, keepdim = True).clamp(min=1e-5))
             # Compute scaled dot-product attention
             attn_logits = ( qk_dot * cq_dot / ( q_norm2 * (self.head_dim * c_norm2 )** 0.5  ))
+            ck_dot = c @ k.transpose(-2, -1)
+            attn_logits_for_cls = ( ck_dot / ( (self.head_dim * c_norm2 )** 0.5))
+            cls_out = (attn_logits_for_cls @ v).reshape(batch_size, 1, self.num_heads * self.head_dim)
         
         else:
             # Compute scaled dot-product attention
@@ -218,7 +221,8 @@ class MultiheadSelfAttention(nn.Module):
         values = attn @ v
         # values.shape = (batch_size, num_heads, seq_len, head_dim)
         if self.special_cls:
-            values = torch.stack(self.v_proj(cls_token), values, dim = -2).transpose(1, 2).reshape(batch_size, seq_len, embed_dim)
+            cls_out = (cls_token.unsqueeze(dim = 1) + cls_out)/2
+            values = torch.cat( (cls_out ,values.transpose(1, 2).reshape(batch_size, seq_len - self.special_cls, embed_dim)), dim = 1)
         else:
             values = values.transpose(1, 2).reshape(batch_size, seq_len, embed_dim)
 
