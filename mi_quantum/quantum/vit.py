@@ -49,8 +49,7 @@ class NMultiheadSelfAttention(nn.Module):
         embed_dim,
         num_heads,
         N=2,  # Order of multilinear form
-        dropout={'embedding_attn': 0.225, 'after_attn': 0.225, 'feedforward': 0.225, 'embedding_pos': 0.225},
-        RBF_similarity='none',
+        dropout={'embedding_attn': 0.225, 'after_attn': 0.225, 'feedforward': 0.225, 'embedding_pos': 0.225}
     ):
         super().__init__()
         assert embed_dim % num_heads == 0, f"Embedding dim {embed_dim} must be divisible by num_heads {num_heads}"
@@ -59,23 +58,10 @@ class NMultiheadSelfAttention(nn.Module):
         self.num_heads = num_heads
         self.head_dim = embed_dim // num_heads
         self.N = N
-        self.RBF_similarity = RBF_similarity
+
 
         if self.N < 2:
             raise ValueError("N (order of multilinear form) must be at least 2.")
-        elif self.N > 2 and self.RBF_similarity != 'none':
-            raise ValueError("RBF similarity only implemented for N=2.")
-
-        assert (
-            RBF_similarity in ['none', 'quantum', 'linear']
-            or (isinstance(RBF_similarity, numbers.Real) and 0 < RBF_similarity <= 1)  # type: ignore
-        ), f"Invalid RBF_similarity: {RBF_similarity}"
-
-
-        if self.RBF_similarity == 'quantum':
-            self.quantum_ponderation = QuantumLayer(num_qubits=2, entangle=True, trainBool=True, graph='chain')
-        elif self.RBF_similarity == 'linear':
-            self.ponderation_param = nn.Parameter(torch.tensor(0.0))
 
         # One projection per tensor dimension
         self.projections = nn.ModuleList([nn.Linear(embed_dim, embed_dim) for _ in range(N)])
@@ -141,53 +127,6 @@ class NMultiheadSelfAttention(nn.Module):
         attn = torch.softmax(attn_logits, dim=-1)
         attn = self.dropout(attn)
 
-        if self.RBF_similarity != 'none':
-                if self.N != 2:
-                    raise ValueError("RBF similarity is only implemented for standard 2D tensors products (Query and Key) ")
-                # Compute RBF similarity
-                if self.RBF_similarity == 'quantum':
-                    ponderators = torch.sigmoid( self.quantum_ponderation( torch.zeros( (2,), device = x.device) ))
-                elif isinstance(self.RBF_similarity, numbers.Real):    
-                    ponderators = torch.tensor([1 - self.RBF_similarity, self.RBF_similarity], device=x.device, dtype=torch.float32)
-                else: # RBF_similarity == 'linear'
-                    sigmoid_val = torch.sigmoid(self.ponderation_param)
-                    ponderators = torch.stack([1 - sigmoid_val, sigmoid_val])
-
-                # promote to float32 for stability
-                q32 = proj_x[0].float()
-                k32 = proj_x[1].float()
-
-                q_norm = (q32 ** 2).sum(dim=-1, keepdim=True)            # (B,H,S,1)
-                k_norm = (k32 ** 2).sum(dim=-1, keepdim=True).transpose(-2, -1)  # (B,H,1,S)
-
-                # distance
-                dists_squared = q_norm + k_norm - 2 * (q32 @ k32.transpose(-2, -1))
-
-                # clamp negative numerical noise
-                dists_squared = dists_squared.clamp_min(0.0)
-
-                # scale (avoid too-small / too-large)
-                sigma_squared = q_norm.clamp_min(1e-8).clamp_max(1e4)  # tune upper bound as needed
-
-                attn_RBF_logits = torch.exp(-dists_squared / sigma_squared)
-
-                denom = attn_RBF_logits.sum(dim=-1, keepdim=True).clamp_min(1e-8)
-                attn_RBF = attn_RBF_logits / denom
-
-                attn_RBF = self.dropout(attn_RBF)
-
-                if (~torch.isfinite(attn_RBF)).any():
-                    import warnings
-                    print(f"Registered non-finite attn. ponderators={ponderators}")
-                    warnings.warn(f"Non-finite RBF attention detected. Ponderators = {ponderators}", RuntimeWarning)
-                    
-                # sanitize just in case
-                attn_RBF = torch.nan_to_num(attn_RBF, nan=0.0, posinf=0.0, neginf=0.0)
-
-                # mix (ponderators assumed roughly sum=1 but be safe)
-
-                weight_sum = ponderators[0] + ponderators[1]
-                attn = (ponderators[0] * attn + ponderators[1] * attn_RBF) / (weight_sum + 1e-7)
 
         # compute values using dedicated v_proj (so values are independent of mode projections)
         v = self.v_proj(x).view(B, S, self.num_heads, self.head_dim).transpose(1, 2)  # (B,H,S,D)
@@ -203,7 +142,7 @@ class NMultiheadSelfAttention(nn.Module):
         return out, attn
 
 class MultiheadSelfAttention(nn.Module):
-    def __init__(self, embed_dim, num_heads, dropout={'embedding_attn': 0.225, 'after_attn': 0.225, 'feedforward': 0.225, 'embedding_pos': 0.225}, RBF_similarity = False, special_cls = False):
+    def __init__(self, embed_dim, num_heads, dropout={'embedding_attn': 0.225, 'after_attn': 0.225, 'feedforward': 0.225, 'embedding_pos': 0.225}, special_cls = False):
         super().__init__()
         assert embed_dim % num_heads == 0, f"Embedding dimension ({embed_dim}) should be divisible by number of heads ({num_heads})"
 
@@ -211,16 +150,8 @@ class MultiheadSelfAttention(nn.Module):
         self.num_heads = num_heads
         self.head_dim = embed_dim // num_heads
         self.special_cls = special_cls
-        assert RBF_similarity == 'none' or RBF_similarity == 'quantum' or RBF_similarity == 'linear' or (isinstance(RBF_similarity, numbers.Real) and 0 < RBF_similarity <= 1), f"RBF_similarity must be set to 'none', 'quantum', 'linear' or a float between 0 and 1, but got {RBF_similarity}"
-        self.RBF_similarity = RBF_similarity
-        print(f'Setting up multihead self-attention with RBF_similarity: {self.RBF_similarity}')
 
-        if self.RBF_similarity == 'quantum':
-            self.quantum_ponderation = QuantumLayer(num_qubits=2, entangle= True, trainBool= True, graph= 'chain' )
-        elif self.RBF_similarity == 'linear':
-            self.ponderation_param = nn.Parameter(torch.tensor(0.0))  # initialized at 0 → sigmoid = 0.5
-
-        print('Started a MutliheadSelfAttention layer with embed_dim:', embed_dim, 'num_heads:', num_heads, 'head_dim:', self.head_dim, 'RBF_similarity:', self.RBF_similarity)
+        print('Started a MutliheadSelfAttention layer with embed_dim:', embed_dim, 'num_heads:', num_heads, 'head_dim:', self.head_dim)
 
         if self.special_cls:
             self.cls_proj = nn.Linear(embed_dim, embed_dim)
@@ -260,63 +191,26 @@ class MultiheadSelfAttention(nn.Module):
             for proj, x in zip([self.q_proj, self.k_proj, self.v_proj], [x, x, x])
         ]
 
-        # Compute scaled dot-product attention
         qk_dot = q @ k.transpose(-2, -1)
+        q_norm2 = (q.float()**2).sum(dim = -1, keepdim = True).clamp(min=1e-5)
 
-        attn_logits = ( qk_dot / ( (self.head_dim )** 0.5))
+        if self.special_cls:
+            cls_token = x[:,0,:]
+            x = x[:,1:,:]
+            c = self.cls_proj(cls_token).reshape(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+            cq_dot = c @ q.transpose(-2, -1)
+            c_norm =  ((c.float()**2).sum(dim = -1, keepdim = True).clamp(min=1e-5))
+            # Compute scaled dot-product attention
+            attn_logits = ( qk_dot * cq_dot / ( q_norm2 * (self.head_dim * c_norm2 )** 0.5  ))
+        
+        else:
+            # Compute scaled dot-product attention
+            attn_logits = ( qk_dot / ( (self.head_dim * q_norm2 )** 0.5))
+
         # attn_logits.shape = (batch_size, num_heads, seq_len, seq_len)
         attn = attn_logits.softmax(dim=-1)
         # attn.shape = (batch_size, num_heads, seq_len, seq_len)
         attn = self.dropout(attn)
-
-        if self.RBF_similarity != 'none':
-            if self.tensor_dimension != 2:
-                raise ValueError("RBF similarity is only implemented for standard 2D tensors products (Query and Key) ")
-            # Compute RBF similarity
-            if self.RBF_similarity == 'quantum':
-                ponderators = torch.sigmoid( self.quantum_ponderation( torch.zeros( (2,), device = x.device) ))
-            elif isinstance(self.RBF_similarity, numbers.Real):    
-                ponderators = torch.tensor([1 - self.RBF_similarity, self.RBF_similarity], device=x.device, dtype=torch.float32)
-            else: # RBF_similarity == 'linear'
-                sigmoid_val = torch.sigmoid(self.ponderation_param)
-                ponderators = torch.stack([1 - sigmoid_val, sigmoid_val])
-
-            # promote to float32 for stability
-            q32 = q.float()
-            k32 = k.float()
-
-            q_norm = (q32 ** 2).sum(dim=-1, keepdim=True)            # (B,H,S,1)
-            k_norm = (k32 ** 2).sum(dim=-1, keepdim=True).transpose(-2, -1)  # (B,H,1,S)
-
-            # distance
-            dists_squared = q_norm + k_norm - 2 * (q32 @ k32.transpose(-2, -1))
-
-            # clamp negative numerical noise
-            dists_squared = dists_squared.clamp_min(0.0)
-
-            # scale (avoid too-small / too-large)
-            sigma_squared = q_norm.clamp_min(1e-8).clamp_max(1e4)  # tune upper bound as needed
-
-            attn_RBF_logits = torch.exp(-dists_squared / sigma_squared)
-
-            denom = attn_RBF_logits.sum(dim=-1, keepdim=True).clamp_min(1e-8)
-            attn_RBF = attn_RBF_logits / denom
-
-            attn_RBF = self.dropout(attn_RBF)
-
-            if (~torch.isfinite(attn_RBF)).any():
-                import warnings
-                print(f"Registered non-finite attn. ponderators={ponderators}")
-                warnings.warn(f"Non-finite RBF attention detected. Ponderators = {ponderators}", RuntimeWarning)
-                
-            # sanitize just in case
-            attn_RBF = torch.nan_to_num(attn_RBF, nan=0.0, posinf=0.0, neginf=0.0)
-
-            # mix (ponderators assumed roughly sum=1 but be safe)
-
-            weight_sum = ponderators[0] + ponderators[1]
-            attn = (ponderators[0] * attn + ponderators[1] * attn_RBF) / (weight_sum + 1e-7)
-
 
         # Compute output
         values = attn @ v
@@ -394,23 +288,22 @@ class FeedForward(nn.Module):
         return x
 
 class TransformerBlock_Attention_Chosen_QMLP(nn.Module):
-    def __init__(self, hidden_size, num_heads, mlp_hidden_size, hidden_size_out, Attention_N = 2, quantum_mlp = True, RBF_similarity= 'none', dropout={'embedding_attn': 0.225, 'after_attn': 0.225, 'feedforward': 0.225, 'embedding_pos': 0.225}, 
+    def __init__(self, hidden_size, num_heads, mlp_hidden_size, hidden_size_out, Attention_N = 2, quantum_mlp = True, dropout={'embedding_attn': 0.225, 'after_attn': 0.225, 'feedforward': 0.225, 'embedding_pos': 0.225}, 
                     attention_selection="filter", special_cls = False ,train_q = False, entangle = True, q_stride = 4, connectivity = 'chain', RD = 1, img_size = 28, patch_size = 4):
         super().__init__()
 
         self.attention_selection = attention_selection
         self.quantum_mlp = quantum_mlp
         self.train_q = train_q
-        self.RBF_similarity = RBF_similarity
         self.dropout = dropout
         self.Attention_N = Attention_N
         self.special_cls = special_cls
         # Attention components
         self.attn_norm = nn.LayerNorm(hidden_size)
         if self.Attention_N == 2:
-            self.attn = MultiheadSelfAttention(embed_dim = hidden_size, num_heads = num_heads, dropout = dropout, RBF_similarity= self.RBF_similarity, special_cls = self.special_cls)
+            self.attn = MultiheadSelfAttention(embed_dim = hidden_size, num_heads = num_heads, dropout = dropout, special_cls = self.special_cls)
         else:
-            self.attn = NMultiheadSelfAttention(embed_dim = hidden_size, num_heads = num_heads, N=Attention_N, dropout = dropout, RBF_similarity= self.RBF_similarity)
+            self.attn = NMultiheadSelfAttention(embed_dim = hidden_size, num_heads = num_heads, N=Attention_N, dropout = dropout)
         self.attn_dropout = nn.Dropout(dropout['after_attn'])
         self.hidden_size_out = hidden_size_out
         self.RD = RD
@@ -495,7 +388,7 @@ class TransformerBlock_Attention_Chosen_QMLP(nn.Module):
 
 class VisionTransformer(nn.Module):
     def __init__(self, img_size, num_channels, num_classes, patch_size, hidden_size, num_heads, num_transformer_blocks, mlp_hidden_size, Attention_N = 2,
-                    quantum_mlp = False, RBF_similarity = 'none', quantum_classification = False, dropout= {'embedding_attn': 0.225, 'after_attn': 0.225, 'feedforward': 0.225, 'embedding_pos': 0.225}, 
+                    quantum_mlp = False, quantum_classification = False, dropout= {'embedding_attn': 0.225, 'after_attn': 0.225, 'feedforward': 0.225, 'embedding_pos': 0.225}, 
                     channels_last=False, RD = 1, attention_selection = 'filter', special_cls = False,
                     paralel = 1, train_q = False, entangle = True, q_stride = 1, connectivity = 'chain'
                     ):
@@ -521,7 +414,6 @@ class VisionTransformer(nn.Module):
         self.quantum_mlp = quantum_mlp
         self.quantum_classification = quantum_classification
         self.train_q = train_q
-        self.RBF_similarity = RBF_similarity
         self.special_cls = special_cls
         self.entangle = entangle
         self.q_stride = q_stride
@@ -548,7 +440,7 @@ class VisionTransformer(nn.Module):
         # Transformer blocks with attention selection
         self.transformer_blocks = nn.ModuleList( [nn.ModuleList([TransformerBlock_Attention_Chosen_QMLP(hidden_size // RD**i, num_heads, mlp_hidden_size, hidden_size // RD**(i + 1) , 
                                                                                         Attention_N = self.Attention_N, quantum_mlp = self.quantum_mlp,
-                                                                                        RBF_similarity= self.RBF_similarity ,dropout = self.dropout_values,
+                                                                                        dropout = self.dropout_values,
                                                                                         attention_selection = self.attention_selection, special_cls = self.special_cls,
                                                                                         train_q = self.train_q, entangle = self.entangle, q_stride = self.q_stride, connectivity = self.connectivity)
                                             for i in range(num_transformer_blocks)]) for j in range(paralel) ] )
@@ -682,7 +574,7 @@ class Decoder(nn.Module):
         return mixed_out
     
 class AutoEnformer(nn.Module):
-            def __init__(self, img_size, num_channels, patch_size, hidden_size, num_heads, num_transformer_blocks, RBF_similarity ,mlp_hidden_size,
+            def __init__(self, img_size, num_channels, patch_size, hidden_size, num_heads, num_transformer_blocks ,mlp_hidden_size,
                               Attention_N = 2, dropout={'embedding_attn': 0.225, 'after_attn': 0.225, 'feedforward': 0.225, 'embedding_pos': 0.225}, channels_last=False, attention_selection='none', RD=1,
                               q_stride = 1, paralel = 1):
                 super(AutoEnformer, self).__init__()
@@ -701,9 +593,6 @@ class AutoEnformer(nn.Module):
                 self.starting_dim = num_channels * patch_size ** 2
                 self.dropout_values = dropout
                 self.num_channels = num_channels
-
-                self.RBF_similarity = RBF_similarity
-
                 self.q_stride = q_stride
 
                 self.patch_embedding = nn.Conv2d(
@@ -721,14 +610,14 @@ class AutoEnformer(nn.Module):
 
                 self.encoder_layers = nn.ModuleList( [nn.ModuleList ([TransformerBlock_Attention_Chosen_QMLP(self.hidden_size // self.RD**i, self.num_heads, self.mlp_hidden_size, self.hidden_size // self.RD**(i + 1) , 
                                                                                                     Attention_N = self.Attention_N , quantum_mlp = False,
-                                                                                                    RBF_similarity= self.RBF_similarity ,dropout = self.dropout_values,
+                                                                                                    dropout = self.dropout_values,
                                                                                                     attention_selection = 'none',
                                                                                                     train_q = False, entangle = False, q_stride = self.q_stride )
                                                         for i in range(self.num_transformer_blocks)])  for j in range(self.paralel) ] )
                 
                 self.decoder_layers = nn.ModuleList( [nn.ModuleList ([TransformerBlock_Attention_Chosen_QMLP(self.hidden_size // self.RD**i, self.num_heads, self.mlp_hidden_size, self.hidden_size // self.RD**(i + 1) ,
                                                                                             Attention_N = self.Attention_N , quantum_mlp = False,
-                                                                                            RBF_similarity= self.RBF_similarity ,dropout = self.dropout_values,
+                                                                                            dropout = self.dropout_values,
                                                                                             attention_selection = 'none',
                                                                                             train_q = False, entangle = False, q_stride = self.q_stride )
                                                         for i in range(self.num_transformer_blocks, 0, -1) ]) for j in range(self.paralel) ] )
@@ -834,7 +723,7 @@ class DeViT(nn.Module):
                 self.vit = VisionTransformer(
                     img_size=shape[-1], num_channels=shape[0], num_classes=num_classes,
                     patch_size=p['patch_size'], hidden_size= shape[0]* p['patch_size']**2, num_heads=p['num_head'], Attention_N = p['Attention_N'],
-                    num_transformer_blocks=p['num_transf'], attention_selection= p['attention_selection'], special_cls = p['special_cls'], RBF_similarity = 'none',
+                    num_transformer_blocks=p['num_transf'], attention_selection= p['attention_selection'], special_cls = p['special_cls'], 
                     mlp_hidden_size=p['mlp_size'], quantum_mlp = False, dropout = p['dropout'], channels_last=False, entangle=False, quantum_classification = False,
                     paralel = p['paralel'], RD = p['RD'], train_q = False, q_stride = p['q_stride'], connectivity = 'chain'
                 )

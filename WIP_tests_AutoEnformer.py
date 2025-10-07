@@ -24,13 +24,13 @@ N2 = 150  # Number of epochs for the second step
 p1 = {
     'learning_rate': 5e-3, 'hidden_size': 48, 'dropout': {'embedding_attn': 0.225, 'after_attn': 0.225, 'feedforward': 0.225, 'embedding_pos': 0.225},
     'num_head': 4, 'Attention_N' : 2, 'num_transf': 2, 'mlp_size': 18, 'patch_size': 4, 'weight_decay': 1e-7, 'attention_selection': 'none', 'entangle': True,
-    'paralel' : 1 ,'connectivity': 'chain', 'RD': 1, 'patience': -1, 'scheduler_factor': 0.999, 'q_stride': 1 , 'RBF_similarity': 'none'  # No early stopping
+    'paralel' : 1 ,'connectivity': 'chain', 'RD': 1, 'patience': -1, 'scheduler_factor': 0.999, 'q_stride': 1   # No early stopping
 }
 
 p2 = {
     'learning_rate': 0.0025, 'hidden_size': 48, 'dropout': {'embedding_attn': 0.1, 'after_attn': 0.05, 'feedforward': 0.05, 'embedding_pos': 0.05},
     'quantum' : False, 'num_head': 4, 'Attention_N' : 2, 'num_transf': 2, 'mlp_size': 3, 'patch_size': 4, 'weight_decay': 1e-7, 'attention_selection': 'filter',
-    'RD': 1, 'special_cls' : False, 'paralel': 2, 'patience': -1, 'scheduler_factor': 0.9995, 'q_stride': 1, 'RBF_similarity': 'none'  # No early stopping
+    'RD': 1, 'special_cls' : False, 'paralel': 2, 'patience': -1, 'scheduler_factor': 0.9995, 'q_stride': 1  # No early stopping
 }
 
 if __name__ == "__main__":
@@ -62,7 +62,7 @@ if __name__ == "__main__":
             df = pd.DataFrame(columns=columns)
             df.to_csv(csv_path, mode='a', header=True, index=False)
 
-        q_config = {'none', 'patchwise', 'quanvolution'}
+        q_config = {'none', 'quanvolution'}
         progress_levels = [0, 25, 50, 75, 100]
         # Grid search loop
         if SendToTelegramBool:
@@ -84,7 +84,7 @@ if __name__ == "__main__":
                 NoneBool, PatchBool, QuanvBool = 'none' in q_config, 'patchwise' in q_config, 'quanvolution' in q_config
                 print(f"Current quantum configuration:\nNormal latent representations: {NoneBool}\nPatchwise Quantum latent representations: {PatchBool}\nQuanvolution latent representations: {QuanvBool}")
 
-                if ((idx == 0) and (lr == 1e-5)) or RepeatAutoencoder:
+                if ((idx == 0) and (lr == 1e-4)) or RepeatAutoencoder:
                     print(f'\nTraining first model: Autoencoder\nOptiosn: Autoencoder with Quantum Layers: {list(q_config)} and Learning Rate: {p1["learning_rate"]}\n')
 
                     # Load data
@@ -102,7 +102,7 @@ if __name__ == "__main__":
                         patch_size=p1['patch_size'], hidden_size=p1['hidden_size'], num_heads=p1['num_head'],
                         num_transformer_blocks=p1['num_transf'], attention_selection=p1['attention_selection'],
                         mlp_hidden_size=p1['mlp_size'], Attention_N = p1['Attention_N'], dropout=p1['dropout'], 
-                        paralel = p1['paralel'], RBF_similarity = p1['RBF_similarity'] ,channels_last=False
+                        paralel = p1['paralel'],channels_last=False
                     )
 
                     # Train
