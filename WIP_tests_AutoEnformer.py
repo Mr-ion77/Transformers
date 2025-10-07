@@ -183,18 +183,18 @@ if __name__ == "__main__":
                             MoLatentDatasetsTensors.append ( list(zip(all_latents_quanv, all_labels)) )
 
                             
-                    if NoneBool:
-                        NorLatents = qpctorch.data.create_dataloaders(data_dir = None, batch_size = B, channels_last = channels_last,
+                    
+                    NorLatents = qpctorch.data.create_dataloaders(data_dir = None, batch_size = B, channels_last = channels_last,
                                                     tensors = NorLatentDatasetsTensors, transforms={'train': None, 'val': None, 'test': None}
-                                                    )
-                    if PatchBool:
-                        PatchLatents = qpctorch.data.create_dataloaders(data_dir = None, batch_size = B, channels_last = channels_last,
+                                                    ) if NoneBool else None
+                    
+                    PatchLatents = qpctorch.data.create_dataloaders(data_dir = None, batch_size = B, channels_last = channels_last,
                                                 tensors = QuLatentDatasetsTensors, transforms={'train': None, 'val': None, 'test': None}
-                                                )
-                    if QuanvBool:
-                        QuanvLatents = qpctorch.data.create_dataloaders(data_dir = None, batch_size = B, channels_last = channels_last,
+                                                ) if PatchBool else None
+            
+                    QuanvLatents = qpctorch.data.create_dataloaders(data_dir = None, batch_size = B, channels_last = channels_last,
                                                 tensors = MoLatentDatasetsTensors, transforms={'train': None, 'val': None, 'test': None}
-                                                )
+                                                ) if QuanvBool else None
 
                     Latents = {k: v for k, v in zip(['none', 'patchwise', 'quanvolution'], [NorLatents, PatchLatents, QuanvLatents]) if k in q_config}
 
@@ -247,14 +247,6 @@ if __name__ == "__main__":
                         '../QTransformer_Results_and_Datasets/autoenformer_results/current_results/results_grid_search.csv', mode='a', header=False, index=False
                     )
 
-                    History_df = pd.read_csv('../QTransformer_Results_and_Datasets/autoenformer_results/current_results/results_grid_search.csv')
-
-                    plt.figure(figsize=(10, 6))
-                    plt.boxplot([History_df['val_auc'], History_df['test_auc']], tick_labels=['Validation AUC', 'Test AUC']) # type: ignore
-                    plt.title('Validation and Test AUC Distribution')
-                    plt.ylabel('AUC')
-                    plt.grid(axis='y')
-                    plt.savefig('../QTransformer_Results_and_Datasets/autoenformer_results/current_results/auc_boxplot.png')
 
         if SendToTelegramBool:
             SendToTelegram(csv_file = "../QTransformer_Results_and_Datasets/autoenformer_results/current_results/results_grid_search.csv", columns = ['lr', 'q_config', 'test_auc'])

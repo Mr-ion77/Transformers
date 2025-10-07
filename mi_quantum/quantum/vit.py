@@ -186,6 +186,10 @@ class MultiheadSelfAttention(nn.Module):
         # x.shape = (batch_size, seq_len, embed_dim)
         assert embed_dim == self.embed_dim, f"Input embedding dimension ({embed_dim}) should match layer embedding dimension ({self.embed_dim})"
 
+        if self.special_cls:
+            cls_token = x[:,0,:]
+            x = x[:,1:,:]
+
         q, k, v = [
             proj(x).reshape(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
             for proj, x in zip([self.q_proj, self.k_proj, self.v_proj], [x, x, x])
@@ -195,8 +199,6 @@ class MultiheadSelfAttention(nn.Module):
         q_norm2 = (q.float()**2).sum(dim = -1, keepdim = True).clamp(min=1e-5)
 
         if self.special_cls:
-            cls_token = x[:,0,:]
-            x = x[:,1:,:]
             c = self.cls_proj(cls_token).reshape(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
             cq_dot = c @ q.transpose(-2, -1)
             c_norm =  ((c.float()**2).sum(dim = -1, keepdim = True).clamp(min=1e-5))
@@ -215,10 +217,13 @@ class MultiheadSelfAttention(nn.Module):
         # Compute output
         values = attn @ v
         # values.shape = (batch_size, num_heads, seq_len, head_dim)
-        values = values.transpose(1, 2).reshape(batch_size, seq_len, embed_dim)
-        # values.shape = (batch_size, seq_len, embed_dim)
-        x = self.o_proj(values)
+        if self.special_cls:
+            values = torch.stack(self.v_proj(cls_token), values, dim = -2).transpose(1, 2).reshape(batch_size, seq_len, embed_dim)
+        else:
+            values = values.transpose(1, 2).reshape(batch_size, seq_len, embed_dim)
+
         # x.shape = (batch_size, seq_len, embed_dim)
+        x = self.o_proj(values)     
 
         return x, attn
 
