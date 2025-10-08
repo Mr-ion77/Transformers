@@ -76,10 +76,9 @@ if __name__ == "__main__":
             if SendToTelegramBool and progress in progress_levels:
                 SendToTelegram(progress = progress)                
 
-            for special_cls in [True, False]:
-                save_path = Path(f"../QTransformer_Results_and_Datasets/autoenformer_results/current_results/grid_search{idx}")
+            for special_cls in [False, True]:
+                save_path = Path(f"../QTransformer_Results_and_Datasets/derma_results/current_results/grid_search{idx}")
                 save_path.mkdir(parents=True, exist_ok=True)
-                os.makedirs(save_path / 'autoencoder', exist_ok=True)
 
                 print(f"\nPoint {idx} Training model with special_cls set to: {special_cls}")
                 print(f"Point {idx} Training model with special_cls set to: {special_cls}")
@@ -102,13 +101,15 @@ if __name__ == "__main__":
                     mlp=p['mlp_size'], wd=p['weight_decay'], patience= p['patience'], scheduler_factor=p['scheduler_factor'], autoencoder=False
                 ) # type: ignore
 
-                
+                print(f"Point {idx} Finished Training model with special_cls set to: {special_cls}\n")
+                print(f"Point {idx} Finished Training model with special_cls set to: {special_cls}\n")
+                print(f"Point {idx} Finished Training model with special_cls set to: {special_cls}\n")
                 # Save results
                 row = {
                     'idx': idx, 
                         'special_cls': special_cls, 'test_auc': test_auc, 'test_acc': test_acc, 'val_auc': val_auc, 
-                        'val_acc': val_acc, 'train_auc': train_auc,'#params': params,
-                        **p
+                        'val_acc': val_acc, 'train_auc': train_auc,'#params': params
+                        
                 }
 
                 pd.DataFrame([row], columns=columns).to_csv(

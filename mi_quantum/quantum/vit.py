@@ -199,26 +199,38 @@ class MultiheadSelfAttention(nn.Module):
         q_norm2 = (q.float()**2).sum(dim = -1, keepdim = True).clamp(min=1e-5)
 
         if self.special_cls:
-            c = self.cls_proj(cls_token).reshape(batch_size, 1, self.num_heads, self.head_dim).transpose(1, 2)
+            c = self.q_proj(cls_token).reshape(batch_size, 1, self.num_heads, self.head_dim).transpose(1, 2)
             cq_dot = c @ q.transpose(-2, -1)
             c_norm2 =  ((c.float()**2).sum(dim = -1, keepdim = True).clamp(min=1e-5))
             # Compute scaled dot-product attention
-            attn_logits = ( qk_dot * cq_dot / ( q_norm2 * (self.head_dim * c_norm2 )** 0.5  ))
+            attn_logits_standard = ( qk_dot / ( (self.head_dim * q_norm2 )** 0.5))
+            attn_logits_cls_to_others = attn_logits_standard * cq_dot / (  (q_norm2 * c_norm2 )** 0.5  )
+            
             ck_dot = c @ k.transpose(-2, -1)
-            attn_logits_for_cls = ( ck_dot / ( (self.head_dim * c_norm2 )** 0.5))
-            cls_out = (attn_logits_for_cls @ v).reshape(batch_size, 1, self.num_heads * self.head_dim)
+            attn_logits_others_to_cls = ( ck_dot / ( (self.head_dim * c_norm2 )** 0.5))
+            cls_out = (attn_logits_others_to_cls @ v).reshape(batch_size, 1, self.num_heads * self.head_dim)
+
+            # attn_logits.shape = (batch_size, num_heads, seq_len, seq_len)
+            attn_standard, attn_cls_to_others = attn_logits_standard.softmax(dim=-1), attn_logits_cls_to_others.softmax(dim=-1)
+            
+            # attn.shape = (batch_size, num_heads, seq_len, seq_len)
+            attn_standard, attn_cls_to_others = self.dropout(attn_standard), self.dropout(attn_cls_to_others)
+
+            # Compute output
+            values = attn_standard @ v
         
         else:
             # Compute scaled dot-product attention
             attn_logits = ( qk_dot / ( (self.head_dim * q_norm2 )** 0.5))
 
-        # attn_logits.shape = (batch_size, num_heads, seq_len, seq_len)
-        attn = attn_logits.softmax(dim=-1)
-        # attn.shape = (batch_size, num_heads, seq_len, seq_len)
-        attn = self.dropout(attn)
+            # attn_logits.shape = (batch_size, num_heads, seq_len, seq_len)
+            attn = attn_logits.softmax(dim=-1)
+            # attn.shape = (batch_size, num_heads, seq_len, seq_len)
+            attn = self.dropout(attn)
 
-        # Compute output
-        values = attn @ v
+            # Compute output
+            values = attn @ v
+
         # values.shape = (batch_size, num_heads, seq_len, head_dim)
         if self.special_cls:
             cls_out = (cls_token.unsqueeze(dim = 1) + cls_out)/2

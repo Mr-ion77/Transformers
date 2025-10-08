@@ -77,14 +77,9 @@ class QuantumLayer(torch.nn.Module):
 
             qml.AngleEmbedding(inputs, wires=range(num_qubits), rotation='Y')
 
-            # if self.trainBool:
-            #     for qubit in range(num_qubits):
-            #         theta, phi, rho = weights[qubit*3 : (qubit+1)*3]
-            #         qml.U3(theta, phi, rho, wires=qubit)
-
             # if self.entangle:
             #     for i, pair in enumerate(self.graph):
-            #             qml.CNOT(wires=[pair[0], pair[1]])
+            #            qml.CNOT(wires=[pair[0], pair[1]])
                         #qml.CRX(np.pi/3 if not self.trainBool else weights[num_qubits*3 + i], wires=[pair[0], pair[1]]) 
 
             qml.StronglyEntanglingLayers(weights, wires=range(num_qubits), ranges = [2])
