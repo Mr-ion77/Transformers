@@ -196,36 +196,43 @@ class MultiheadSelfAttention(nn.Module):
             proj(x).reshape(batch_size, seq_len - self.special_cls, self.num_heads, self.head_dim).transpose(1, 2)  # (B, H, S, D)  
             for proj, x in zip([self.q_proj, self.k_proj, self.v_proj], [x, x, x, x])
         ]
-
+        # q, k, v.shape = (batch_size, num_heads, seq_len, head_dim)
         qk_dot = q @ k.transpose(-2, -1)
+        # promote for stability, compute norms and avoid NaNs
         q_norm2 = (q.float()**2).sum(dim = -1, keepdim = True).clamp(min=1e-5)
-        values = torch.zeros((batch_size, self.num_heads, seq_len - self.special_cls, self.head_dim), device = x.device)
+        # Compute scaled dot-product attention logits
+        attn_logits_standard = ( qk_dot / ( (self.head_dim * q_norm2 )** 0.5)) 
+        # Compute softmax and dropout to get weights
+        attn_standard = self.dropout( attn_logits_standard.softmax(dim=-1) )    # (B, H, S, S)
+        # Compute output
+        values = attn_standard @ v  # (B, H, S, D)
 
         if self.special_cls:
-
+            # Compute special attention logits involving the cls token: 
+            # compute the projection over the cls_token of the projection of key over query.
+            # First get query for cls_token
             c = self.q_proj(cls_token).reshape(batch_size, 1, self.num_heads, self.head_dim).transpose(1, 2)                        # (B, H, 1, D)
+
+            # Compute dot products and norms
             cq_dot = c @ q.transpose(-2, -1)                                                                                        # (B, H, 1, D) @ (B, H, D, S) -> (B, H, 1, S)
             c_norm2 =  ((c.float()**2).sum(dim = -1, keepdim = True).clamp(min=1e-5))                                               # (B, H, 1, D) (keepdim = True)
+
             # Compute scaled dot-product attention
-            attn_logits_standard = ( qk_dot / ( (self.head_dim * q_norm2 )** 0.5))                                                  # (B, H, S, S)
             attn_logits_cls_to_others = attn_logits_standard * cq_dot / (  (q_norm2 * c_norm2 )** 0.5  )                            # (B, H, S, S)
-            
+            attn_cls_to_others = self.dropout( attn_logits_cls_to_others.softmax(dim=-1) )                                          # (B, H, S, S)
+
+            # Now compute attention from others to cls_token in a standard way
             ck_dot = c @ k.transpose(-2, -1)                                                                                        # (B, H, 1, D) @ (B, H, D, S) -> (B, H, 1, S)
             attn_logits_others_to_cls = ( ck_dot / ( (self.head_dim * c_norm2 )** 0.5))                                             # (B, H, 1, S)
-            cls_out = (attn_logits_others_to_cls @ v).reshape(batch_size, 1, self.num_heads * self.head_dim)                        # (B, H, 1, S) @ (B, H, S, D) -> (B, H, 1, D) -> (B, 1, E)
 
-            # attn_logits.shape = (batch_size, num_heads, seq_len, seq_len)
-            attn_standard, attn_cls_to_others = attn_logits_standard.softmax(dim=-1), attn_logits_cls_to_others.softmax(dim=-1)     # (B, H, S, S)
-            
-            # attn.shape = (batch_size, num_heads, seq_len, seq_len)
-            attn_standard, attn_cls_to_others = self.dropout(attn_standard), self.dropout(attn_cls_to_others)
+            # Compute softmax and dropout to get weights
+            attn_others_to_cls = self.dropout( attn_logits_others_to_cls.softmax(dim=-1) )                                          # (B, H, 1, S)
+            cls_out = (attn_others_to_cls @ v).reshape(batch_size, 1, self.num_heads * self.head_dim)                               # (B, H, 1, S) @ (B, H, S, D) -> (B, H, 1, D) -> (B, 1, E)
 
             # Compute output
-            values = atten_cls_to_others @ cls_proj
-        
-        values += attn @ v
+            values += attn_cls_to_others @ cls_proj
+            # values.shape = (batch_size, num_heads, seq_len - 1, head_dim)
 
-        # values.shape = (batch_size, num_heads, seq_len, head_dim)
         if self.special_cls:
             values = torch.cat( (cls_out ,values.transpose(1, 2).reshape(batch_size, seq_len - self.special_cls, embed_dim)), dim = 1)
         else:
@@ -234,7 +241,7 @@ class MultiheadSelfAttention(nn.Module):
         # x.shape = (batch_size, seq_len, embed_dim)
         x = self.o_proj(values)     
 
-        return x, attn
+        return x, attn_standard
 
 class FeedForward(nn.Module):
     def __init__(self, hidden_size, mlp_hidden_size, hidden_size_out , quantum = True, dropout={'embedding_attn': 0.225, 'after_attn': 0.225, 'feedforward': 0.225, 'embedding_pos': 0.225},
