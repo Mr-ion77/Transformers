@@ -33,6 +33,7 @@ p2 = {
     'RD': 1, 'special_cls' : False, 'paralel': 2, 'patience': -1, 'scheduler_factor': 0.9995, 'q_stride': 1  # No early stopping
 }
 
+
 if __name__ == "__main__":
     try:
         # Save dictionary with all the hyperparameters and results in a json file
