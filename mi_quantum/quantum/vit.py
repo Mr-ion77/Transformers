@@ -189,51 +189,44 @@ class MultiheadSelfAttention(nn.Module):
         if self.special_cls:
             cls_token = x[:,0,:]
             x = x[:,1:,:]
+            cls_proj = self.cls_proj(x).reshape(batch_size, seq_len - self.special_cls, self.num_heads, self.head_dim).transpose(1, 2)  # (B, H, S, D)
 
-        q, k, v = [
-            proj(x).reshape(batch_size, seq_len - self.special_cls, self.num_heads, self.head_dim).transpose(1, 2)
-            for proj, x in zip([self.q_proj, self.k_proj, self.v_proj], [x, x, x])
+
+        q, k, v, = [
+            proj(x).reshape(batch_size, seq_len - self.special_cls, self.num_heads, self.head_dim).transpose(1, 2)  # (B, H, S, D)  
+            for proj, x in zip([self.q_proj, self.k_proj, self.v_proj], [x, x, x, x])
         ]
 
         qk_dot = q @ k.transpose(-2, -1)
         q_norm2 = (q.float()**2).sum(dim = -1, keepdim = True).clamp(min=1e-5)
+        values = torch.zeros((batch_size, self.num_heads, seq_len - self.special_cls, self.head_dim), device = x.device)
 
         if self.special_cls:
-            c = self.q_proj(cls_token).reshape(batch_size, 1, self.num_heads, self.head_dim).transpose(1, 2)
-            cq_dot = c @ q.transpose(-2, -1)
-            c_norm2 =  ((c.float()**2).sum(dim = -1, keepdim = True).clamp(min=1e-5))
+
+            c = self.q_proj(cls_token).reshape(batch_size, 1, self.num_heads, self.head_dim).transpose(1, 2)                        # (B, H, 1, D)
+            cq_dot = c @ q.transpose(-2, -1)                                                                                        # (B, H, 1, D) @ (B, H, D, S) -> (B, H, 1, S)
+            c_norm2 =  ((c.float()**2).sum(dim = -1, keepdim = True).clamp(min=1e-5))                                               # (B, H, 1, D) (keepdim = True)
             # Compute scaled dot-product attention
-            attn_logits_standard = ( qk_dot / ( (self.head_dim * q_norm2 )** 0.5))
-            attn_logits_cls_to_others = attn_logits_standard * cq_dot / (  (q_norm2 * c_norm2 )** 0.5  )
+            attn_logits_standard = ( qk_dot / ( (self.head_dim * q_norm2 )** 0.5))                                                  # (B, H, S, S)
+            attn_logits_cls_to_others = attn_logits_standard * cq_dot / (  (q_norm2 * c_norm2 )** 0.5  )                            # (B, H, S, S)
             
-            ck_dot = c @ k.transpose(-2, -1)
-            attn_logits_others_to_cls = ( ck_dot / ( (self.head_dim * c_norm2 )** 0.5))
-            cls_out = (attn_logits_others_to_cls @ v).reshape(batch_size, 1, self.num_heads * self.head_dim)
+            ck_dot = c @ k.transpose(-2, -1)                                                                                        # (B, H, 1, D) @ (B, H, D, S) -> (B, H, 1, S)
+            attn_logits_others_to_cls = ( ck_dot / ( (self.head_dim * c_norm2 )** 0.5))                                             # (B, H, 1, S)
+            cls_out = (attn_logits_others_to_cls @ v).reshape(batch_size, 1, self.num_heads * self.head_dim)                        # (B, H, 1, S) @ (B, H, S, D) -> (B, H, 1, D) -> (B, 1, E)
 
             # attn_logits.shape = (batch_size, num_heads, seq_len, seq_len)
-            attn_standard, attn_cls_to_others = attn_logits_standard.softmax(dim=-1), attn_logits_cls_to_others.softmax(dim=-1)
+            attn_standard, attn_cls_to_others = attn_logits_standard.softmax(dim=-1), attn_logits_cls_to_others.softmax(dim=-1)     # (B, H, S, S)
             
             # attn.shape = (batch_size, num_heads, seq_len, seq_len)
             attn_standard, attn_cls_to_others = self.dropout(attn_standard), self.dropout(attn_cls_to_others)
 
             # Compute output
-            values = attn_standard @ v
+            values = atten_cls_to_others @ cls_proj
         
-        else:
-            # Compute scaled dot-product attention
-            attn_logits = ( qk_dot / ( (self.head_dim * q_norm2 )** 0.5))
-
-            # attn_logits.shape = (batch_size, num_heads, seq_len, seq_len)
-            attn = attn_logits.softmax(dim=-1)
-            # attn.shape = (batch_size, num_heads, seq_len, seq_len)
-            attn = self.dropout(attn)
-
-            # Compute output
-            values = attn @ v
+        values += attn @ v
 
         # values.shape = (batch_size, num_heads, seq_len, head_dim)
         if self.special_cls:
-            cls_out = (cls_token.unsqueeze(dim = 1) + cls_out)/2
             values = torch.cat( (cls_out ,values.transpose(1, 2).reshape(batch_size, seq_len - self.special_cls, embed_dim)), dim = 1)
         else:
             values = values.transpose(1, 2).reshape(batch_size, seq_len, embed_dim)
