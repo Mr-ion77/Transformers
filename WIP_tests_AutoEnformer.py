@@ -29,7 +29,7 @@ p1 = {
 
 p2 = {
     'learning_rate': 0.0025, 'hidden_size': 18, 'dropout': {'embedding_attn': 0.125, 'after_attn': 0.175, 'feedforward': 0.125, 'embedding_pos': 0.125},
-    'quantum' : False, 'num_head': 4, 'Attention_N' : 2, 'num_transf': 2, 'mlp_size': 6, 'patch_size': 4, 'weight_decay': 1e-7, 'attention_selection': 'filter',
+    'quantum' : False, 'num_head': 1, 'Attention_N' : 2, 'num_transf': 2, 'mlp_size': 6, 'patch_size': 4, 'weight_decay': 1e-7, 'attention_selection': 'filter',
     'RD': 1, 'special_cls' : False, 'paralel': 2, 'patience': -1, 'scheduler_factor': 0.9995, 'q_stride': 1  # No early stopping
 }
 
@@ -153,6 +153,7 @@ if __name__ == "__main__":
                                     quanv_outs = []                   
                                 
                                 latent_aux = model1.get_latent_representation(images)
+                                
                                 for i in range(p1['paralel']):
                                     if NoneBool:
                                         normal_outs.append( latent_aux[i] )   # FOR NEXT TEST ONLY WITH NORMAL

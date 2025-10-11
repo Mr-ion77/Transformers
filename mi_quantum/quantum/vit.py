@@ -754,7 +754,6 @@ class DeViT(nn.Module):
             def forward(self, x):  
                 
                 assert x.shape[-1] == self.dim_latent, f"Input feature dimension ({x.shape[-1]}) does not match expected size ({self.dim_latent})"
-
                 x = self.dimension_adjustment(x)  
             
                 return self.vit(x, patch_embedding_required = False)  # Skip patch embedding in ViT

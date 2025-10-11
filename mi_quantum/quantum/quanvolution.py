@@ -82,7 +82,7 @@ class QuantumConv2D(nn.Module):
             output = kernel_out.transpose(1, 2).view(B, -1, H_out, W_out)
             outputs_by_channel.append(output)
 
-        return torch.cat(outputs_by_channel, dim=1)  # (B, C×D, H_out, W_out)
+        return torch.cat(outputs_by_channel, dim=1) if C > 1 else output[:,0,:,:] # (B, C×D, H_out, W_out)
     
 
 
