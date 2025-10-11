@@ -473,17 +473,18 @@ class VisionTransformer(nn.Module):
 
         
 
-    def forward(self, x):
+    def forward(self, x, patch_embedding_required = True):
         if self.channels_last:
             x = x.permute(0, 3, 1, 2)
         # x.shape = (batch_size, num_channels, img_size, img_size)
-
-        x = self.patch_embedding(x)
-        # x.shape = (batch_size, hidden_size, sqrt(num_patches), sqrt(num_patches))
-        x = x.flatten(start_dim=2)
-        # x.shape = (batch_size, hidden_size, num_patches)
-        x = x.transpose(1, 2)
-        # x.shape = (batch_size, num_patches, hidden_size)
+        if patch_embedding_required:
+            assert x.shape[2] * x.shape[3] % (self.patch_embedding.kernel_size[0] ** 2) == 0, "Image dimensions must be divisible by the patch size."
+            x = self.patch_embedding(x)
+            # x.shape = (batch_size, hidden_size, sqrt(num_patches), sqrt(num_patches))
+            x = x.flatten(start_dim=2)
+            # x.shape = (batch_size, hidden_size, num_patches)
+            x = x.transpose(1, 2)
+            # x.shape = (batch_size, num_patches, hidden_size)
 
         # CLS token
         x = torch.cat((self.cls_token.expand(x.shape[0], -1, -1), x), dim=1)
@@ -730,7 +731,7 @@ class DeViT(nn.Module):
                 self.num_classes = num_classes
                 self.p = p
                 self.shape = shape
-                self.dimension_adjustment = nn.Linear(dim_latent, shape[0]* p['patch_size']**2)
+                self.dimension_adjustment = nn.Linear(dim_latent, p['hidden_size'])
                 self.dim_latent = dim_latent
 
                 self.trainlosslist = []
@@ -743,7 +744,7 @@ class DeViT(nn.Module):
 
                 self.vit = VisionTransformer(
                     img_size=shape[-1], num_channels=shape[0], num_classes=num_classes,
-                    patch_size=p['patch_size'], hidden_size= shape[0]* p['patch_size']**2, num_heads=p['num_head'], Attention_N = p['Attention_N'],
+                    patch_size=p['patch_size'], hidden_size= p['hidden_size'], num_heads=p['num_head'], Attention_N = p['Attention_N'],
                     num_transformer_blocks=p['num_transf'], attention_selection= p['attention_selection'], special_cls = p['special_cls'], 
                     mlp_hidden_size=p['mlp_size'], quantum_mlp = False, dropout = p['dropout'], channels_last=False, entangle=False, quantum_classification = False,
                     paralel = p['paralel'], RD = p['RD'], train_q = False, q_stride = p['q_stride'], connectivity = 'chain'
@@ -755,6 +756,6 @@ class DeViT(nn.Module):
                 assert x.shape[-1] == self.dim_latent, f"Input feature dimension ({x.shape[-1]}) does not match expected size ({self.dim_latent})"
 
                 x = self.dimension_adjustment(x)  
-                x = x.reshape((x.shape[0],) + self.shape)
-                return self.vit(x)
+            
+                return self.vit(x, patch_embedding_required = False)  # Skip patch embedding in ViT
 
