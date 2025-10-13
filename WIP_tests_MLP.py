@@ -28,9 +28,7 @@ p1 = {
 }
 
 p2 = {
-    'learning_rate': 0.0025, 'hidden_size': 18, 'dropout': {'embedding_attn': 0.15, 'after_attn': 0.175, 'feedforward': 0.15, 'embedding_pos': 0.15},
-    'quantum' : False, 'num_head': 1, 'Attention_N' : 2, 'num_transf': 2, 'mlp_size': 9, 'patch_size': 4, 'weight_decay': 1e-7, 'attention_selection': 'filter',
-    'RD': 1, 'special_cls' : False, 'paralel': 2, 'patience': -1, 'scheduler_factor': 0.9995, 'q_stride': 1  # No early stopping
+    'learning_rate': [5e-4, 7.5e-4, 1e-3, 2.5e-3, 5e-3], 'hidden_size': 25*6, 'dropout': 0.1, 'weight_decay': 1e-7, 'n_layers' : 10
 }
 
 
@@ -38,9 +36,9 @@ if __name__ == "__main__":
     try:
         # Save dictionary with all the hyperparameters and results in a json file
         progress = 0
-        os.makedirs('../QTransformer_Results_and_Datasets/autoenformer_results/current_results', exist_ok = True)
+        os.makedirs('../QTransformer_Results_and_Datasets/autoenformer_results/MLP_as_classifier/current_results', exist_ok = True)
 
-        with open('../QTransformer_Results_and_Datasets/autoenformer_results/current_results/hyperparameters.json', 'w') as f:
+        with open('../QTransformer_Results_and_Datasets/autoenformer_results/MLP_as_classifier/current_results/hyperparameters.json', 'w') as f:
             f.write('\nHyperparameters for Autoencoder\n')
             json.dump(p1, f, indent=4)
             f.write('\nHyperparameters for Classifier\n')  # Separator text between dictionaries
@@ -58,7 +56,7 @@ if __name__ == "__main__":
         NExperiments = 20
 
         
-        csv_path = '../QTransformer_Results_and_Datasets/autoenformer_results/current_results/results_grid_search.csv'
+        csv_path = '../QTransformer_Results_and_Datasets/autoenformer_results/MLP_as_classifier/current_results/results_grid_search.csv'
         if not os.path.exists(csv_path):
             df = pd.DataFrame(columns=columns)
             df.to_csv(csv_path, mode='a', header=True, index=False)
@@ -76,7 +74,7 @@ if __name__ == "__main__":
 
             for lr in [5e-4, 7.5e-4, 1e-3, 2.5e-3, 5e-3]:
                 print(f"\n\nPoint {idx}")
-                save_path = Path(f"../QTransformer_Results_and_Datasets/autoenformer_results/current_results/grid_search{idx}")
+                save_path = Path(f"../QTransformer_Results_and_Datasets/autoenformer_results/MLP_as_classifier/current_results/grid_search{idx}")
                 save_path.mkdir(parents=True, exist_ok=True)
                 os.makedirs(save_path / 'autoencoder', exist_ok=True)
 
@@ -201,7 +199,7 @@ if __name__ == "__main__":
                     Latents = {k: v for k, v in zip(['none', 'patchwise', 'quanvolution'], [NorLatents, PatchLatents, QuanvLatents]) if k in q_config}
 
                     if idx == 0:
-                        save_path_latent = Path(f"../QTransformer_Results_and_Datasets/autoenformer_results/current_results/latent_datasets")
+                        save_path_latent = Path(f"../QTransformer_Results_and_Datasets/autoenformer_results/MLP_as_classifier/current_results/latent_datasets")
                         save_path_latent.mkdir(parents=True, exist_ok=True)
                         if PatchBool:
                             torch.save(QuLatentDatasetsTensors[0], save_path_latent / 'qlatent_train_dataset.pt')
@@ -223,19 +221,15 @@ if __name__ == "__main__":
                     config_dataset = Latents[config]
                     shape2 = config_dataset[-1]
                     p2['learning_rate'] = lr
-                    model2 = qpctorch.quantum.vit.DeViT(num_classes=7, p = p2, shape = shape, dim_latent = shape2[-1]) # The shape needed is that of the original images, in this case [3, 28, 28]
+                    model2 = qpctorch.classical.mlp.MLP(input_dim= p1['mlp_size']* (img_size//p1['patch_size'])**2, hidden_size= p2['hidden_size'], n_layers = p2['n_layers'], n_classes = 7, dropout = p2['dropout']) # The shape needed is that of the original images, in this case [3, 28, 28]
 
                     print('\nTraining second model: classifier ViT on latent representations\n')
                     print(f'QUANTUM SETTING IS: {config} and current lr is: {p2["learning_rate"]}')
                     # Train second model
-                    test_auc, test_acc, val_auc, val_acc, train_auc, params2 = qpctorch.training.train_and_evaluate(
-                        model2, config_dataset[0], config_dataset[1], config_dataset[2], num_classes=7,
-                        learning_rate=p2['learning_rate'], num_epochs=N2, device=device, mapping=False,
-                        res_folder=str(save_path), hidden_size=p2['hidden_size'], dropout=p2['dropout'],
-                        num_heads=p2['num_head'], patch_size=p2['patch_size'], num_transf=p2['num_transf'],
-                        mlp=p2['mlp_size'], wd=p2['weight_decay'], patience= p2['patience'], scheduler_factor=p2['scheduler_factor'], autoencoder=False
-                    ) # type: ignore
-
+                    test_auc, test_acc, val_auc, val_acc, train_auc, params2 = qpctorch.classical.mlp.train_mlp_classifier(
+                        model2, config_dataset[0], config_dataset[1], config_dataset[2],
+                        epochs=N2, lr=lr, weight_decay=p2['weight_decay'], device=device
+                    )
                     
                     # Save results
                     row = {
@@ -246,12 +240,12 @@ if __name__ == "__main__":
                     }
 
                     pd.DataFrame([row], columns=columns).to_csv(
-                        '../QTransformer_Results_and_Datasets/autoenformer_results/current_results/results_grid_search.csv', mode='a', header=False, index=False
+                        '../QTransformer_Results_and_Datasets/autoenformer_results/MLP_as_classifier/current_results/results_grid_search.csv', mode='a', header=False, index=False
                     )
 
 
         if SendToTelegramBool:
-            SendToTelegram(csv_file = "../QTransformer_Results_and_Datasets/autoenformer_results/current_results/results_grid_search.csv", columns = ['lr', 'q_config', 'test_auc'])
+            SendToTelegram(csv_file = "../QTransformer_Results_and_Datasets/autoenformer_results/MLP_as_classifier/current_results/results_grid_search.csv", columns = ['lr', 'q_config', 'test_auc'])
 
     except Exception as e:
          SendToTelegram(progress = progress, error_message=str(e))

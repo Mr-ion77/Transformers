@@ -1,29 +1,67 @@
 import torch
-
+import sklearn
+import numpy as np
+import math
 
 class MLP(torch.nn.Module):
-    def __init__(self, hidden_size):
+    def __init__(self, input_dim, hidden_size, n_layers = 3, n_classes = 1, dropout = 0.0, red_factor = 1.4):
         super().__init__()
-        self.fc1 = torch.nn.Sequential(torch.nn.LazyLinear(hidden_size), torch.nn.ReLU())
-        self.fc2 = torch.nn.Sequential(torch.nn.Linear(hidden_size, hidden_size), torch.nn.ReLU())
-        self.fc3 = torch.nn.Linear(hidden_size, 1)
 
+        assert n_layers >= 2, "MLP must have at least 2 layers"
+
+        self.first_layer = torch.nn.Linear(input_dim, input_dim)
+        self.first_activation = torch.nn.ReLU()
+        self.first_dropout = torch.nn.Dropout(dropout) if dropout > 0.0 else torch.nn.Identity()
+        # create per-layer dropout instances (if dropout>0) so each layer has its own module
+        # compute progressively reduced dimensions for each layer
+        # guard against degenerate red_factor values
+        if red_factor <= 1.0:
+            # enforce a small reduction factor if user mistakenly provides <=1
+            red_factor = 1.01
+
+        dimensions = []
+        for i in range(n_layers):
+            dim = int(math.floor(input_dim / (red_factor ** i)))
+            dim = max(1, dim)  # ensure at least 1 unit per layer
+            dimensions.append(dim)
+
+        print("MLP layer dimensions:", dimensions)
+        layers = []
+        for i in range(n_layers - 1):
+            layers.append(torch.nn.Sequential(
+                torch.nn.Linear(dimensions[i], dimensions[i+1]),
+                torch.nn.Dropout(dropout) if dropout > 0.0 else torch.nn.Identity(),
+                torch.nn.ReLU()
+            ))
+        self.fc = torch.nn.ModuleList(layers)
+        self.fc_last = torch.nn.Linear( dimensions[-1] , n_classes)
+        
+ 
     def forward(self, x):
-        x = self.fc1(x)
-        x = self.fc2(x)
-        x = self.fc3(x)
+        x = x.view(x.size(0), -1)  # flatten input except batch dim
+        x = self.first_layer(x)
+        x = self.first_activation(x)
+        x = self.first_dropout(x)
+        # apply each middle layer in sequence
+        for layer in self.fc:
+            x = layer(x)
+        x = self.fc_last(x)
         return x
 
 def train_mlp_classifier(MLP_model, train_dl, val_dl, test_dl, epochs, lr, weight_decay, device):
     MLP_model.to(device)
     optimizer = torch.optim.Adam(MLP_model.parameters(), lr=lr, weight_decay=weight_decay)
-    criterion = torch.nn.BCEWithLogitsLoss()
+    criterion = torch.nn.CrossEntropyLoss()    # labels should be long integers, shape (batch,)
+
     train_auc = []
     val_auc = []
     test_auc = []
     train_acc = []
     val_acc = []
     test_acc = []
+
+    n_params = sum(p.numel() for p in MLP_model.parameters() if p.requires_grad)
+    print(f"Number of trainable parameters in MLP: {n_params}")
 
     # helper: safe import of sklearn metrics (fall back if not installed)
     try:
@@ -38,11 +76,16 @@ def train_mlp_classifier(MLP_model, train_dl, val_dl, test_dl, epochs, lr, weigh
         y_probs = []
         MLP_model.eval()
         with torch.no_grad():
-            for inputs, labels in dl:
+            for inputs, labels, index in dl:
                 inputs = inputs.to(device)
-                labels = labels.to(device).float().unsqueeze(1)
+                labels = labels.to(device).long().squeeze(1) if labels.dim() > 1 else labels.to(device).long()   # squeeze removes extra dim if present
                 outputs = MLP_model(inputs)
-                probs = torch.sigmoid(outputs)
+                # for multiclass outputs (N, C) use softmax to get class probabilities
+                if outputs.dim() == 2 and outputs.shape[1] > 1:
+                    probs = torch.nn.functional.softmax(outputs, dim=1)
+                else:
+                    # fallback to sigmoid for single-logit outputs
+                    probs = torch.sigmoid(outputs)
                 y_trues.append(labels.cpu())
                 y_probs.append(probs.cpu())
 
@@ -50,8 +93,13 @@ def train_mlp_classifier(MLP_model, train_dl, val_dl, test_dl, epochs, lr, weigh
             return float('nan'), float('nan')
 
         y_true = torch.cat(y_trues).numpy().ravel()
-        y_prob = torch.cat(y_probs).numpy().ravel()
-        preds = (y_prob >= 0.5).astype(int)
+        y_prob = torch.cat(y_probs).numpy()  # keep shape (N, C) for multiclass
+        # predicted class = argmax over class axis for multiclass
+        if y_prob.ndim == 1:
+            # single-probability case (binary/logit reduced to 1 dim)
+            preds = (y_prob >= 0.5).astype(int)
+        else:
+            preds = y_prob.argmax(axis=-1)
 
         # accuracy (safe to compute)
         try:
@@ -63,7 +111,13 @@ def train_mlp_classifier(MLP_model, train_dl, val_dl, test_dl, epochs, lr, weigh
         auc = float('nan')
         if _have_sklearn:
             try:
-                auc = float(roc_auc_score(y_true, y_prob))
+                # if multiclass, binarize labels and use multi_class option
+                from sklearn.preprocessing import label_binarize
+                if y_prob.ndim == 1 or y_prob.shape[1] == 1:
+                    auc = float(roc_auc_score(y_true, y_prob))
+                else:
+                    y_true_bin = label_binarize(y_true, classes=range(y_prob.shape[1]))
+                    auc = float(roc_auc_score(y_true_bin, y_prob, multi_class='ovr'))
             except Exception:
                 auc = float('nan')
 
@@ -71,9 +125,8 @@ def train_mlp_classifier(MLP_model, train_dl, val_dl, test_dl, epochs, lr, weigh
 
     for epoch in range(epochs):
         MLP_model.train()
-        for inputs, labels in train_dl:
-            inputs, labels = inputs.to(device), labels.to(device).float().unsqueeze(1)
-            optimizer.zero_grad()
+        for inputs, labels, index in train_dl:
+            inputs, labels = inputs.to(device), labels.to(device).long().squeeze(1) if labels.dim() > 1 else labels.to(device).long()   # squeeze removes extra dim if present
             outputs = MLP_model(inputs)
             loss = criterion(outputs, labels)
             loss.backward()
@@ -82,8 +135,8 @@ def train_mlp_classifier(MLP_model, train_dl, val_dl, test_dl, epochs, lr, weigh
         MLP_model.eval()
         val_loss = 0.0
         with torch.no_grad():
-            for inputs, labels in val_dl:
-                inputs, labels = inputs.to(device), labels.to(device).float().unsqueeze(1)
+            for inputs, labels, index in val_dl:
+                inputs, labels = inputs.to(device), labels.to(device).long().squeeze(1) if labels.dim() > 1 else labels.to(device).long()
                 outputs = MLP_model(inputs)
                 loss = criterion(outputs, labels)
                 val_loss += loss.item()
@@ -107,20 +160,18 @@ def train_mlp_classifier(MLP_model, train_dl, val_dl, test_dl, epochs, lr, weigh
     test_loss = 0.0
     MLP_model.eval()
     with torch.no_grad():
-        for inputs, labels in test_dl:
-            inputs, labels = inputs.to(device), labels.to(device).float().unsqueeze(1)
-            outputs = MLP_model(inputs)
+        for inputs, labels, index in test_dl:
+            inputs, labels = inputs.to(device), labels.to(device).long().squeeze(1) if labels.dim() > 1 else labels.to(device).long()
+            outputs =  MLP_model(inputs)
             loss = criterion(outputs, labels)
             test_loss += loss.item()
     test_loss /= len(test_dl)
     print(f'Test Loss: {test_loss:.4f}')
 
     # compute test metrics
-    test_auc_val, test_acc_val = _compute_metrics(test_dl)
-    test_auc.append(test_auc_val)
-    test_acc.append(test_acc_val)
+    test_auc, test_acc = _compute_metrics(test_dl)
 
-    print(f'Test Loss: {test_loss:.4f}, Test AUC: {test_auc_val:.4f}, Test Acc: {test_acc_val:.4f}')
+    print(f'Test Loss: {test_loss:.4f}, Test AUC: {test_auc:.4f}, Test Acc: {test_acc:.4f}')
 
     # return model, final test loss, and metrics history
     metrics = {
@@ -132,4 +183,4 @@ def train_mlp_classifier(MLP_model, train_dl, val_dl, test_dl, epochs, lr, weigh
         'test_acc': test_acc,
     }
 
-    return MLP_model, test_auc, test_acc, val_auc, val_acc, train_auc
+    return test_auc, test_acc, val_auc[-1], val_acc[-1], train_auc[-1], n_params
