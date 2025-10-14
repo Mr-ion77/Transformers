@@ -16,21 +16,21 @@ from TelegramBot import SendToTelegram
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
 
-B = 256
+B = 128
 N1 = 150  # Number of epochs Autoencoder
-N2 = 150  # Number of epochs Classifier
+N2 = 100  # Number of epochs Classifier
 
 # Hyperparams
 p1 = {
     'learning_rate': 5e-3, 'hidden_size': 48, 'dropout': {'embedding_attn': 0.125, 'after_attn': 0.125, 'feedforward': 0.125, 'embedding_pos': 0.125},
-    'num_head': 4, 'Attention_N' : 2, 'num_transf': 1, 'mlp_size': 9, 'patch_size': 4, 'weight_decay': 1e-7, 'attention_selection': 'none', 'entangle': True,
+    'num_head': 4, 'Attention_N' : 2, 'num_transf': 1, 'mlp_size': 18, 'patch_size': 4, 'weight_decay': 1e-7, 'attention_selection': 'none', 'entangle': True,
     'paralel' : 1 ,'connectivity': 'chain', 'RD': 1, 'patience': -1, 'scheduler_factor': 0.999, 'q_stride': 1   # No early stopping
 }
 
 p2 = {
     'learning_rate': 0.0025, 'hidden_size': 18, 'dropout': {'embedding_attn': 0.15, 'after_attn': 0.175, 'feedforward': 0.15, 'embedding_pos': 0.15},
-    'quantum' : False, 'num_head': 1, 'Attention_N' : 2, 'num_transf': 2, 'mlp_size': 9, 'patch_size': 4, 'weight_decay': 1e-7, 'attention_selection': 'filter',
-    'RD': 1, 'special_cls' : False, 'paralel': 2, 'patience': -1, 'scheduler_factor': 0.9995, 'q_stride': 1  # No early stopping
+    'quantum' : False, 'num_head': 1, 'Attention_N' : 2, 'num_transf': 4, 'mlp_size': 9, 'patch_size': 4, 'weight_decay': 1e-7, 'attention_selection': 'none',
+    'RD': 1, 'special_cls' : False, 'paralel': 1, 'patience': -1, 'scheduler_factor': 0.9995, 'q_stride': 1  # No early stopping
 }
 
 
@@ -56,6 +56,8 @@ if __name__ == "__main__":
         RepeatAutoencoder = False       # Set to True if you want to train the autoencoder each time for more variability. For a better performance and faster training set to False.
         SendToTelegramBool = True
         NExperiments = 20
+        Trained_Autoencoder_Once = False # If RepeatAutoencoder is False, set this to True if you have already trained the autoencoder once and have the latent datasets saved. If False, it will train the autoencoder once and save the latent datasets for future use.
+        NameOfExperiment = 'AutoEnformer Huge Latent Dimension'
 
         
         csv_path = '../QTransformer_Results_and_Datasets/autoenformer_results/current_results/results_grid_search.csv'
@@ -63,7 +65,7 @@ if __name__ == "__main__":
             df = pd.DataFrame(columns=columns)
             df.to_csv(csv_path, mode='a', header=True, index=False)
 
-        q_config = {'none', 'patchwise', 'quanvolution'}
+        q_config = {'none', 'quanvolution'}
         progress_levels = [0, 25, 50, 75, 100]
         # Grid search loop
         if SendToTelegramBool:
@@ -74,7 +76,7 @@ if __name__ == "__main__":
             if SendToTelegramBool and progress in progress_levels:
                 SendToTelegram(progress = progress)                
 
-            for lr in [5e-4, 7.5e-4, 1e-3, 2.5e-3, 5e-3]:
+            for lr in [(1e-3)/2, (2.5e-3)/2, (5e-3)/2]:
                 print(f"\n\nPoint {idx}")
                 save_path = Path(f"../QTransformer_Results_and_Datasets/autoenformer_results/current_results/grid_search{idx}")
                 save_path.mkdir(parents=True, exist_ok=True)
@@ -85,7 +87,9 @@ if __name__ == "__main__":
                 NoneBool, PatchBool, QuanvBool = 'none' in q_config, 'patchwise' in q_config, 'quanvolution' in q_config
                 print(f"Current quantum configuration:\nNormal latent representations: {NoneBool}\nPatchwise Quantum latent representations: {PatchBool}\nQuanvolution latent representations: {QuanvBool}")
 
-                if ((idx == 0) and (lr == 5e-4)) or RepeatAutoencoder:
+                if (not Trained_Autoencoder_Once) or RepeatAutoencoder:
+                    Trained_Autoencoder_Once = True
+                    # Train autoencoder only once if RepeatAutoencoder is False
                     print(f'\nTraining first model: Autoencoder\nOptiosn: Autoencoder with Quantum Layers: {list(q_config)} and Learning Rate: {p1["learning_rate"]}\n')
 
                     # Load data
@@ -128,6 +132,9 @@ if __name__ == "__main__":
                     if QuanvBool:
                         MoLatentDatasetsTensors = []
                         Quanvolution = QuantumConv2D(patch_size=3, stride=1, padding=1, channels_out = [4], ancilla = 0, graph= p1['connectivity'])
+                    if VerticalBool:
+                        VoLatentDatasetsTensors = []
+                        VerticalQuantumLayer = qpctorch.quantum.pennylane_backend.VerticalQuantumLayer(num_qubits = p1['mlp_size'], entangle = p1['entangle'], graph = p1['connectivity'])
 
                     print(f'Quantum configuration is {q_config} ')
                     
@@ -215,8 +222,6 @@ if __name__ == "__main__":
                             torch.save(MoLatentDatasetsTensors[0], save_path_latent / 'mlatent_train_dataset.pt')
                             torch.save(MoLatentDatasetsTensors[1], save_path_latent / 'mlatent_val_dataset.pt')
                             torch.save(MoLatentDatasetsTensors[2], save_path_latent / 'mlatent_test_dataset.pt')
-                    
-
                 # Create second model for the second step)
 
                 for config in list(q_config):
@@ -234,8 +239,7 @@ if __name__ == "__main__":
                         res_folder=str(save_path), hidden_size=p2['hidden_size'], dropout=p2['dropout'],
                         num_heads=p2['num_head'], patch_size=p2['patch_size'], num_transf=p2['num_transf'],
                         mlp=p2['mlp_size'], wd=p2['weight_decay'], patience= p2['patience'], scheduler_factor=p2['scheduler_factor'], autoencoder=False
-                    ) # type: ignore
-
+                    )
                     
                     # Save results
                     row = {
@@ -251,7 +255,7 @@ if __name__ == "__main__":
 
 
         if SendToTelegramBool:
-            SendToTelegram(csv_file = "../QTransformer_Results_and_Datasets/autoenformer_results/current_results/results_grid_search.csv", columns = ['lr', 'q_config', 'test_auc'])
+            SendToTelegram(csv_file = "../QTransformer_Results_and_Datasets/autoenformer_results/current_results/results_grid_search.csv", columns = ['lr', 'q_config', 'test_auc'], title = NameOfExperiment)
 
     except Exception as e:
          SendToTelegram(progress = progress, error_message=str(e))
