@@ -116,7 +116,7 @@ class QuantumConv1D(nn.Module):
         elif x.dim() == 4:
             B, C, H, W = x.shape 
             if H != 1:
-                raise Warning(f'Expected H=1 for 1D input, got H={H}. Applying 1-D convolution over H dimension for each W separately.')
+                print(f'Warning: expected H=1 for 1D input, got H={H}. Applying 1-D convolution over H dimension for each W separately.')
             L = H
 
         L_out = (L + 2*self.padding - self.window_size) // self.stride + 1
