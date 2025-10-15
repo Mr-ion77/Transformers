@@ -24,7 +24,7 @@ N = 150 # Number of epochs
 p = {
     'learning_rate': 0.0025, 'hidden_size': 48, 'dropout': {'embedding_attn': 0.225, 'after_attn': 0.225, 'feedforward': 0.225, 'embedding_pos': 0.225},
     'quantum' : False, 'num_head': 4, 'Attention_N' : 2, 'num_transf': 2, 'mlp_size': 6, 'patch_size': 4, 'weight_decay': 1e-7, 'attention_selection': 'filter',
-    'RD': 1, 'special_cls' : False, 'paralel': 2, 'patience': -1, 'scheduler_factor': 0.9995, 'q_stride': 1  # No early stopping
+    'RD': 1, 'special_cls' : False, 'paralel': 2, 'patience': -1, 'scheduler_factor': 0.998, 'q_stride': 4, 'connectivity': 'david_star'  # No early stopping
 }
 
 num_classes = 7
@@ -41,9 +41,7 @@ if __name__ == "__main__":
             
 
         columns = [
-            # 'idx', 'learning_rate', 'hidden_size', 'dropout', 'num_head', 'num_transf', 'mlp_size', 'patch_size',
-            # 'weight_decay', 'attention_selection', 'entangle', 'penny_or_kipu', 'RD', 'convolutional', 'paralel', 
-            'idx', 'special_cls', 'test_auc', 'test_acc', 'val_auc', 'val_acc', 'train_auc',  '#params'
+            'idx', 'q_config', 'test_auc', 'test_acc', 'val_auc', 'val_acc', 'train_auc',  '#params'
         ]
 
         channels_last = False           # Set to True if last dimension of datasets tensors match channels dimension
@@ -76,38 +74,39 @@ if __name__ == "__main__":
             if SendToTelegramBool and progress in progress_levels:
                 SendToTelegram(progress = progress)                
 
-            for special_cls in [True, False]:
+            for q_config in [True, False]:
                 save_path = Path(f"../QTransformer_Results_and_Datasets/derma_results/current_results/grid_search{idx}")
                 save_path.mkdir(parents=True, exist_ok=True)
 
-                print(f"\nPoint {idx} Training model with special_cls set to: {special_cls}")
-                print(f"Point {idx} Training model with special_cls set to: {special_cls}")
-                print(f"Point {idx} Training model with special_cls set to: {special_cls}\n")
+                print(f"\nPoint {idx} Training model with q_config set to: {q_config}\n")
+                print(f"Point {idx} Training model with q_config set to: {q_config}\n")
+                print(f"Point {idx} Training model with q_config set to: {q_config}\n")
 
                 model = qpctorch.quantum.vit.VisionTransformer(
                     img_size=shape[-1], num_channels=shape[0], num_classes=num_classes,
                     patch_size=p['patch_size'], hidden_size= shape[0]* p['patch_size']**2, num_heads=p['num_head'], Attention_N = p['Attention_N'],
-                    num_transformer_blocks=p['num_transf'], attention_selection= p['attention_selection'], special_cls = special_cls, 
-                    mlp_hidden_size=p['mlp_size'], quantum_mlp = False, dropout = p['dropout'], channels_last=False, entangle=False, quantum_classification = False,
-                    paralel = p['paralel'], RD = p['RD'], train_q = False, q_stride = p['q_stride'], connectivity = 'chain'
+                    num_transformer_blocks=p['num_transf'], attention_selection= p['attention_selection'], special_cls = p['special_cls'], 
+                    mlp_hidden_size=p['mlp_size'], quantum_mlp = q_config, dropout = p['dropout'], channels_last=False, entangle=True, quantum_classification = False,
+                    paralel = p['paralel'], RD = p['RD'], train_q = False, q_stride = p['q_stride'], connectivity = p['connectivity']
                 )
 
-                # Train second model
+                # Train model
                 test_auc, test_acc, val_auc, val_acc, train_auc, params = qpctorch.training.train_and_evaluate(
                     model, train_dl, val_dl, test_dl, num_classes=7,
                     learning_rate=p['learning_rate'], num_epochs=N, device=device, mapping=False,
                     res_folder=str(save_path), hidden_size=p['hidden_size'], dropout=p['dropout'],
                     num_heads=p['num_head'], patch_size=p['patch_size'], num_transf=p['num_transf'],
                     mlp=p['mlp_size'], wd=p['weight_decay'], patience= p['patience'], scheduler_factor=p['scheduler_factor'], autoencoder=False
-                ) # type: ignore
+                )
 
-                print(f"Point {idx} Finished Training model with special_cls set to: {special_cls}\n")
-                print(f"Point {idx} Finished Training model with special_cls set to: {special_cls}\n")
-                print(f"Point {idx} Finished Training model with special_cls set to: {special_cls}\n")
+                print(f"\nPoint {idx} Training model with q_config set to: {q_config}\n")
+                print(f"Point {idx} Training model with q_config set to: {q_config}\n")
+                print(f"Point {idx} Training model with q_config set to: {q_config}\n")
+
                 # Save results
                 row = {
                     'idx': idx, 
-                        'special_cls': special_cls, 'test_auc': test_auc, 'test_acc': test_acc, 'val_auc': val_auc, 
+                        'q_config': q_config, 'test_auc': test_auc, 'test_acc': test_acc, 'val_auc': val_auc, 
                         'val_acc': val_acc, 'train_auc': train_auc,'#params': params
                         
                 }

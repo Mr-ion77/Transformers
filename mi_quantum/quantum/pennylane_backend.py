@@ -77,18 +77,17 @@ class QuantumLayer(torch.nn.Module):
 
             qml.AngleEmbedding(inputs, wires=range(num_qubits), rotation='Y')
 
-            # if self.entangle:
-            #     for i, pair in enumerate(self.graph):
-            #            qml.CNOT(wires=[pair[0], pair[1]])
-                        #qml.CRX(np.pi/3 if not self.trainBool else weights[num_qubits*3 + i], wires=[pair[0], pair[1]]) 
+            if self.entangle:
+                for i, pair in enumerate(self.graph):     
+                    qml.CRX(np.pi/3 if not self.trainBool else weights[num_qubits*3 + i], wires=[pair[0], pair[1]]) 
 
-            qml.StronglyEntanglingLayers(weights, wires=range(num_qubits), ranges = [1])
+            #qml.StronglyEntanglingLayers(weights, wires=range(num_qubits), ranges = [1])
 
             return [qml.expval(qml.PauliZ(i)) for i in range(num_qubits)]
 
         #qlayer = qml.QNode(circuit_, dev, interface="torch", diff_method="backprop")
-        #weight_shape = (num_qubits * 3 + entangle *  len(self.graph),) if trainBool else (1,)
-        weight_shape = (1, num_qubits, 3)
+        weight_shape = (num_qubits * 3 + entangle *  len(self.graph),) if trainBool else (1,)
+
         self.magic = qml.qnn.TorchLayer(circuit_, {"weights": weight_shape})
 
         # Freeze weights (non-trainable)

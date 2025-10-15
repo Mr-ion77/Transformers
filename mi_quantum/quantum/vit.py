@@ -305,7 +305,6 @@ class FeedForward(nn.Module):
             x = self.gelu(x)
             x = self.fc2(x)
 
-
         return x
 
 class TransformerBlock_Attention_Chosen_QMLP(nn.Module):
@@ -344,6 +343,7 @@ class TransformerBlock_Attention_Chosen_QMLP(nn.Module):
 
         if attention_selection == "ID" and hidden_size != hidden_size_out:
             raise ValueError("When attention_selection is 'ID', hidden_size must equal hidden_size_out.")
+
 
     def forward(self, x):
         # Attention block
@@ -431,7 +431,7 @@ class VisionTransformer(nn.Module):
         self.attention_selection = attention_selection
         self.starting_dim = num_channels * patch_size ** 2
         self.dropout_values = dropout
-
+        self.q_lr = (img_size * mlp_hidden_size) // patch_size  # Number of high-attention patches to select
         self.quantum_mlp = quantum_mlp
         self.quantum_classification = quantum_classification
         self.train_q = train_q
@@ -471,20 +471,54 @@ class VisionTransformer(nn.Module):
         self.linear = nn.Linear( (hidden_size // (RD**(num_transformer_blocks)) ) * paralel, num_classes)
         self.linear2 = nn.Linear(num_classes,num_classes) if not self.quantum_classification else QuantumLayer(num_qubits=num_classes, entangle=self.entangle, trainBool= self.train_q, graph=self.connectivity)
 
-        
-
-    def forward(self, x, patch_embedding_required = True):
+    def patch_embed_sample(self, x):
         if self.channels_last:
             x = x.permute(0, 3, 1, 2)
         # x.shape = (batch_size, num_channels, img_size, img_size)
+        assert x.shape[2] * x.shape[3] % (self.patch_embedding.kernel_size[0] ** 2) == 0, "Image dimensions must be divisible by the patch size."
+        x = self.patch_embedding(x)
+        # x.shape = (batch_size, hidden_size, sqrt(num_patches), sqrt(num_patches))
+        x = x.flatten(start_dim=2)
+        # x.shape = (batch_size, hidden_size, num_patches)
+        x = x.transpose(1, 2)
+        # x.shape = (batch_size, num_patches, hidden_size)
+        return x
+
+    def get_patches_by_attention(self, x, paralel_branch = 0):
+        """ 
+        x: (batch_size, num_channels, img_size, img_size)
+        n_transformer_block: index of the transformer block to use for attention ranking
+        paralel_branch: index of the parallel branch to use for attention ranking
+        returns: indices of the selected patches, shape (batch_size, q_lr)
+                 and the expanded indices for gathering, shape (batch_size, q_lr, hidden_size)
+
+        Note: cls token is included in the attention calculation but is never selected (as it does not belong to the original image)
+        """
+        x = self.patch_embed_sample(x)
+        # x.shape = (batch_size, num_patches, hidden_size)
+
+        # CLS token
+        x = torch.cat((self.cls_token.expand(x.shape[0], -1, -1), x), dim=1) # We want to add the cls token so that it takes part in the attention calculation
+        # x.shape = (batch_size, num_steps, hidden_size)
+
+        # Positional embedding
+        y = self.dropout(x + self.pos_embedding)  # [B, S, D]
+
+        # Attention block
+        attn_input = self.transformer_blocks[paralel_branch][0].attn_norm(y)
+        _, attn_map = self.transformer_blocks[paralel_branch][0].attn(attn_input)
+        # Rank patches by attention
+        attn_indices = rank_patches_by_attention(attn_map)
+        sel_indices = attn_indices[:, :self.q_lr]               # High-attention patches
+        
+        return x.gather( sel_indices.unsqueeze(-1).expand(-1, -1, x.size(-1)) ) # Shape: (batch_size, q_lr, hidden_size)
+
+
+    def forward(self, x, patch_embedding_required = True):
+
         if patch_embedding_required:
-            assert x.shape[2] * x.shape[3] % (self.patch_embedding.kernel_size[0] ** 2) == 0, "Image dimensions must be divisible by the patch size."
-            x = self.patch_embedding(x)
-            # x.shape = (batch_size, hidden_size, sqrt(num_patches), sqrt(num_patches))
-            x = x.flatten(start_dim=2)
-            # x.shape = (batch_size, hidden_size, num_patches)
-            x = x.transpose(1, 2)
-            # x.shape = (batch_size, num_patches, hidden_size)
+            x = self.patch_embed_sample(x)
+        # x.shape = (batch_size, num_patches, hidden_size)
 
         # CLS token
         x = torch.cat((self.cls_token.expand(x.shape[0], -1, -1), x), dim=1)
@@ -731,7 +765,7 @@ class DeViT(nn.Module):
                 self.num_classes = num_classes
                 self.p = p
                 self.shape = shape
-                self.dimension_adjustment = nn.Linear(dim_latent, p['hidden_size'])
+                self.dimension_adjustment = nn.Linear(dim_latent, p['hidden_size']) if dim_latent != p['hidden_size'] else nn.Identity()
                 self.dim_latent = dim_latent
 
                 self.trainlosslist = []

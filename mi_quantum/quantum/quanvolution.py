@@ -4,6 +4,26 @@ import torch.nn.functional as F
 from mi_quantum.quantum.pennylane_backend import QuantumLayer
 
 
+def median_pad_2d(x, padding):
+    """
+    Pad a 4-D tensor x=(B, C, H, W) with the spatial median per (B,C) channel.
+    padding: int number of pixels to pad on all sides.
+    Returns padded tensor of shape (B, C, H+2*padding, W+2*padding).
+    """
+    if padding == 0:
+        return x
+
+    B, C, H, W = x.shape
+    flat = x.reshape(B, C, -1)
+    med = flat.median(dim=-1).values  # (B, C)
+
+    Hn = H + 2 * padding
+    Wn = W + 2 * padding
+    med_exp = med.view(B, C, 1, 1).expand(B, C, Hn, Wn).contiguous()
+    med_exp[:, :, padding:padding+H, padding:padding+W] = x
+    return med_exp
+
+
 class QuantumKernel(nn.Module):
     def __init__(self, circuit, channels_out = [-1], ancilla = 1):
         super().__init__()
@@ -41,8 +61,11 @@ class QuantumConv2D(nn.Module):
         self.stride = stride
         self.padding = padding
         self.ancilla = ancilla
-        self.unfold = nn.Unfold(kernel_size=self.patch_size, stride=self.stride, padding=self.padding) # Unfold the input to get sliding local blocks
+        # We'll perform median padding manually so set unfold padding to 0
+        self.unfold = nn.Unfold(kernel_size=self.patch_size, stride=self.stride, padding=0) # Unfold the input to get sliding local blocks
         self.channels_last = channels_last
+
+    
 
     def forward(self, x):
         """
@@ -59,7 +82,9 @@ class QuantumConv2D(nn.Module):
 
         for channel in range(C):
 
-            y = x[:,channel,:,:].unsqueeze(1) # shape (B, 1, H, W)
+            y = x[:, channel, :, :].unsqueeze(1)  # shape (B, 1, H, W)
+            # Apply median padding manually so unfold uses padded tensor
+            y = median_pad_2d(y, self.padding)
 
             patches = self.unfold(y)  # (B, patch_size^2, L), L is number of patches
             patches = patches.transpose(1, 2)  # (B, L, patch_size^2)
@@ -101,7 +126,8 @@ class QuantumConv1D(nn.Module):
         self.stride = stride
         self.padding = padding
         self.ancilla = ancilla
-        self.unfold = nn.Unfold(kernel_size=(window_size, 1), stride=(stride, 1), padding=(padding, 0)) # Unfold the input to get sliding local blocks
+        # We'll perform median padding manually so set unfold padding to 0
+        self.unfold = nn.Unfold(kernel_size=(window_size, 1), stride=(stride, 1), padding=(0, 0)) # Unfold the input to get sliding local blocks
 
     def forward(self, x):
         """
@@ -136,6 +162,9 @@ class QuantumConv1D(nn.Module):
                 y = x[:, channel, :, :].unsqueeze(1)  # (B, 1, H, W)
                 B_loc = B
                 W = x.shape[3]
+
+            # Apply median padding manually along the length dimension (and width if applicable)
+            y = median_pad_2d(y, self.padding)
 
             # Extract patches: (B, window_size * 1, L_out * W)
             patches = self.unfold(y)  # (B, window_size, L_out * W)
