@@ -3,7 +3,7 @@ import mi_quantum as qpctorch
 import pandas as pd
 from pathlib import Path
 import itertools
-from mi_quantum.quantum.quanvolution import QuantumConv2D
+from mi_quantum.quantum.quanvolution import QuantumConv2D, QuantumConv1D
 import matplotlib.pyplot as plt
 import os, sys, json
 from tqdm import tqdm
@@ -16,7 +16,7 @@ from TelegramBot import SendToTelegram
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
 
-B = 128
+B = 256
 N1 = 150  # Number of epochs Autoencoder
 N2 = 100  # Number of epochs Classifier
 
@@ -47,8 +47,6 @@ if __name__ == "__main__":
             json.dump(p2, f, indent=4)
 
         columns = [
-            # 'idx', 'learning_rate', 'hidden_size', 'dropout', 'num_head', 'num_transf', 'mlp_size', 'patch_size',
-            # 'weight_decay', 'attention_selection', 'entangle', 'penny_or_kipu', 'RD', 'convolutional', 'paralel', 
             'idx', 'lr', 'q_config', 'test_mse', 'val_mse', '#params1' , 'test_auc', 'test_acc', 'val_auc', 'val_acc', 'train_auc',  '#params2'
         ]
 
@@ -65,7 +63,7 @@ if __name__ == "__main__":
             df = pd.DataFrame(columns=columns)
             df.to_csv(csv_path, mode='a', header=True, index=False)
 
-        q_config = {'none', 'quanvolution'}
+        q_config = {'none', 'quanvolution', 'vertical', 'patchwise'}  # Options: 'none', 'patchwise', 'quanvolution', 'vertical'
         progress_levels = [0, 25, 50, 75, 100]
         # Grid search loop
         if SendToTelegramBool:
@@ -76,7 +74,7 @@ if __name__ == "__main__":
             if SendToTelegramBool and progress in progress_levels:
                 SendToTelegram(progress = progress)                
 
-            for lr in [(1e-3)/2, (2.5e-3)/2, (5e-3)/2]:
+            for lr in [1e-3, 2.5e-3, 5e-3]:
                 print(f"\n\nPoint {idx}")
                 save_path = Path(f"../QTransformer_Results_and_Datasets/autoenformer_results/current_results/grid_search{idx}")
                 save_path.mkdir(parents=True, exist_ok=True)
@@ -84,7 +82,7 @@ if __name__ == "__main__":
 
                 # Determine if quantum processing is enabled based on q_config
                 # q_config can be a string or a list/tuple; handle both
-                NoneBool, PatchBool, QuanvBool = 'none' in q_config, 'patchwise' in q_config, 'quanvolution' in q_config
+                NoneBool, PatchBool, QuanvBool, VerticalBool = 'none' in q_config, 'patchwise' in q_config, 'quanvolution' in q_config, 'vertical' in q_config
                 print(f"Current quantum configuration:\nNormal latent representations: {NoneBool}\nPatchwise Quantum latent representations: {PatchBool}\nQuanvolution latent representations: {QuanvBool}")
 
                 if (not Trained_Autoencoder_Once) or RepeatAutoencoder:
@@ -134,7 +132,8 @@ if __name__ == "__main__":
                         Quanvolution = QuantumConv2D(patch_size=3, stride=1, padding=1, channels_out = [4], ancilla = 0, graph= p1['connectivity'])
                     if VerticalBool:
                         VoLatentDatasetsTensors = []
-                        VerticalQuantumLayer = qpctorch.quantum.pennylane_backend.VerticalQuantumLayer(num_qubits = p1['mlp_size'], entangle = p1['entangle'], graph = p1['connectivity'])
+                        padding = {'Up': 1, 'Down': 1, 'Left': 0, 'Right': 0} 
+                        VerticalQuanvolution = QuantumConv1D(window_size=3, stride=1, padding=1, channels_out = [1], ancilla = 0, graph= p1['connectivity'])
 
                     print(f'Quantum configuration is {q_config} ')
                     
@@ -145,6 +144,8 @@ if __name__ == "__main__":
                             all_latents_quantum = []
                         if QuanvBool:
                             all_latents_quanv = []
+                        if VerticalBool:
+                            all_latents_vertical = []
                         
                         all_labels = []
                         all_indices = []
@@ -157,7 +158,9 @@ if __name__ == "__main__":
                                 if PatchBool:
                                     quantum_outs = []
                                 if QuanvBool:
-                                    quanv_outs = []                   
+                                    quanv_outs = []  
+                                if VerticalBool:
+                                    vertical_outs = []                 
                                 
                                 latent_aux = model1.get_latent_representation(images)
                                 
@@ -167,7 +170,9 @@ if __name__ == "__main__":
                                     if PatchBool:
                                         quantum_outs.append( QuantumLayer( latent_aux[i] ) )
                                     if QuanvBool:
-                                        quanv_outs.append( Quanvolution( latent_aux[i].unsqueeze(dim = 1) ) )
+                                        quanv_outs.append( Quanvolution( latent_aux[i].unsqueeze(dim = 1) ) ) # Add channel dimension = 1 channel
+                                    if VerticalBool:
+                                        quanv_outs.append( VerticalQuanvolution( latent_aux[i].unsqueeze(dim = 1) ) ) # Add channel dimension = 1 channel
 
                             all_labels.extend( labels )
                             if NoneBool:
@@ -179,6 +184,9 @@ if __name__ == "__main__":
                             if QuanvBool:
                                 quanv_representations = torch.cat(quanv_outs, dim = -1).cpu()
                                 all_latents_quanv.extend( quanv_representations )
+                            if VerticalBool:
+                                vertical_representations = torch.cat(vertical_outs, dim = -1).cpu()
+                                all_latents_vertical.extend( vertical_representations )
 
                         all_labels = torch.tensor(all_labels)
                         if NoneBool:
@@ -190,6 +198,9 @@ if __name__ == "__main__":
                         if QuanvBool:
                             all_latents_quanv = torch.stack(all_latents_quanv)
                             MoLatentDatasetsTensors.append ( list(zip(all_latents_quanv, all_labels)) )
+                        if VerticalBool:
+                            all_latents_vertical = torch.stack(all_latents_vertical)
+                            VoLatentDatasetsTensors.append ( list(zip(all_latents_vertical, all_labels)) )
 
                             
                     
@@ -205,7 +216,11 @@ if __name__ == "__main__":
                                                 tensors = MoLatentDatasetsTensors, transforms={'train': None, 'val': None, 'test': None}
                                                 ) if QuanvBool else None
 
-                    Latents = {k: v for k, v in zip(['none', 'patchwise', 'quanvolution'], [NorLatents, PatchLatents, QuanvLatents]) if k in q_config}
+                    VerticalLatents = qpctorch.data.create_dataloaders(data_dir = None, batch_size = B, channels_last = channels_last,
+                                                tensors = VoLatentDatasetsTensors, transforms={'train': None, 'val': None, 'test': None}
+                                                ) if VerticalBool else None
+
+                    Latents = {k: v for k, v in zip(['none', 'patchwise', 'quanvolution', 'vertical'], [NorLatents, PatchLatents, QuanvLatents, VerticalLatents]) if k in q_config}
 
                     if idx == 0:
                         save_path_latent = Path(f"../QTransformer_Results_and_Datasets/autoenformer_results/current_results/latent_datasets")
@@ -222,6 +237,10 @@ if __name__ == "__main__":
                             torch.save(MoLatentDatasetsTensors[0], save_path_latent / 'mlatent_train_dataset.pt')
                             torch.save(MoLatentDatasetsTensors[1], save_path_latent / 'mlatent_val_dataset.pt')
                             torch.save(MoLatentDatasetsTensors[2], save_path_latent / 'mlatent_test_dataset.pt')
+                        if VerticalBool:
+                            torch.save(VoLatentDatasetsTensors[0], save_path_latent / 'vlatent_train_dataset.pt')
+                            torch.save(VoLatentDatasetsTensors[1], save_path_latent / 'vlatent_val_dataset.pt')
+                            torch.save(VoLatentDatasetsTensors[2], save_path_latent / 'vlatent_test_dataset.pt')
                 # Create second model for the second step)
 
                 for config in list(q_config):

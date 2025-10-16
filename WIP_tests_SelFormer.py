@@ -123,7 +123,8 @@ if __name__ == "__main__":
                         NorLatentDatasetsTensors = []
                     if PatchBool:
                         QuLatentDatasetsTensors = []
-                        Quanvolution = qpctorch.quantum.quanvolution.QuantumConv2D(patch_size=2, stride=1, padding=1, channels_out = [0], graph= 'chain')
+                        padding = {'Up': 1, 'Down': 0, 'Left': 1, 'Right': 0}
+                        Quanvolution = qpctorch.quantum.quanvolution.QuantumConv2D(patch_size=2, stride=1, padding=padding, channels_out = [0], graph= 'chain')
 
 
                     print(f'Quantum configuration is {q_config} ')

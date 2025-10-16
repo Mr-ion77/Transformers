@@ -10,17 +10,25 @@ def median_pad_2d(x, padding):
     padding: int number of pixels to pad on all sides.
     Returns padded tensor of shape (B, C, H+2*padding, W+2*padding).
     """
-    if padding == 0:
-        return x
+    
+    if isinstance(padding, (int)):
+        if padding == 0:
+            return x
+        else:
+            padding = {'Up': padding, 'Down': padding, 'Left': padding, 'Right': padding}
+        
+    elif not isinstance(padding, dict):
+        raise ValueError("Padding must be an integer or a dict of 4 integers {'Up': int, 'Down': int, 'Left': int, Right': int}.")
 
     B, C, H, W = x.shape
     flat = x.reshape(B, C, -1)
     med = flat.median(dim=-1).values  # (B, C)
 
-    Hn = H + 2 * padding
-    Wn = W + 2 * padding
+    Hn = H + 2 * padding['Up'] + padding['Down']
+    Wn = W + 2 * padding['Left'] + padding['Right']
     med_exp = med.view(B, C, 1, 1).expand(B, C, Hn, Wn).contiguous()
-    med_exp[:, :, padding:padding+H, padding:padding+W] = x
+    med_exp[:, :, padding['Down']:(Hn-padding['Up']), padding['Left']:(Wn-padding['Right']) ] = x
+    
     return med_exp
 
 
@@ -60,6 +68,10 @@ class QuantumConv2D(nn.Module):
         self.patch_size = patch_size
         self.stride = stride
         self.padding = padding
+        if isinstance(padding, int):
+            self.padding = {'Up': padding, 'Down': padding, 'Left': padding, 'Right': padding}
+        elif not isinstance(padding, dict):
+            raise ValueError("Padding must be an integer or a dict of 4 integers {'Up': int, 'Down': int, 'Left': int, Right': int}.")
         self.ancilla = ancilla
         # We'll perform median padding manually so set unfold padding to 0
         self.unfold = nn.Unfold(kernel_size=self.patch_size, stride=self.stride, padding=0) # Unfold the input to get sliding local blocks
@@ -75,8 +87,8 @@ class QuantumConv2D(nn.Module):
         x = x if self.channels_last == False else x.permute(0, 3, 1, 2)
 
         B, C, H, W = x.shape 
-        H_out = (H + 2*self.padding - self.patch_size) // self.stride + 1
-        W_out = (W + 2*self.padding - self.patch_size) // self.stride + 1
+        H_out = (H + self.padding['Up'] + self.padding['Down'] - self.patch_size) // self.stride + 1
+        W_out = (W + self.padding['Left'] + self.padding['Right'] - self.patch_size) // self.stride + 1
 
         outputs_by_channel = []
 
@@ -124,7 +136,10 @@ class QuantumConv1D(nn.Module):
         self.trainBool = trainBool
         self.window_size = window_size
         self.stride = stride
-        self.padding = padding
+        if isinstance(padding, int):
+            self.padding = {'Up': padding, 'Down': padding}
+        elif not isinstance(padding, dict):
+            raise ValueError("Padding must be an integer or a dict of 2 integers {'Up': int, 'Down': int}.")
         self.ancilla = ancilla
         # We'll perform median padding manually so set unfold padding to 0
         self.unfold = nn.Unfold(kernel_size=(window_size, 1), stride=(stride, 1), padding=(0, 0)) # Unfold the input to get sliding local blocks
@@ -145,7 +160,7 @@ class QuantumConv1D(nn.Module):
                 print(f'Warning: expected H=1 for 1D input, got H={H}. Applying 1-D convolution over H dimension for each W separately.')
             L = H
 
-        L_out = (L + 2*self.padding - self.window_size) // self.stride + 1
+        L_out = (L + self.padding['Up'] + self.padding['Down'] - self.window_size) // self.stride + 1
 
         outputs_by_channel = []
 
