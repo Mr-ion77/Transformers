@@ -172,7 +172,7 @@ if __name__ == "__main__":
                                     if QuanvBool:
                                         quanv_outs.append( Quanvolution( latent_aux[i].unsqueeze(dim = 1) ) ) # Add channel dimension = 1 channel
                                     if VerticalBool:
-                                        quanv_outs.append( VerticalQuanvolution( latent_aux[i].unsqueeze(dim = 1) ) ) # Add channel dimension = 1 channel
+                                        vertical_outs.append( VerticalQuanvolution( latent_aux[i].unsqueeze(dim = 1) ) ) # Add channel dimension = 1 channel
 
                             all_labels.extend( labels )
                             if NoneBool:

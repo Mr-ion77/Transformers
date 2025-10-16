@@ -136,6 +136,7 @@ class QuantumConv1D(nn.Module):
         self.trainBool = trainBool
         self.window_size = window_size
         self.stride = stride
+        self.padding = padding
         if isinstance(padding, int):
             self.padding = {'Up': padding, 'Down': padding, 'Left': 0, 'Right': 0}
         elif not isinstance(padding, dict):
@@ -160,8 +161,6 @@ class QuantumConv1D(nn.Module):
             x = x.unsqueeze(1)
         elif x.dim() == 4:
             B, C, H, W = x.shape 
-            if H != 1:
-                print(f'Warning: expected H=1 for 1D input, got H={H}. Applying 1-D convolution over H dimension for each W separately.')
             L = H
 
         L_out = (L + self.padding['Up'] + self.padding['Down'] - self.window_size) // self.stride + 1
@@ -214,14 +213,8 @@ class QuantumConv1D(nn.Module):
 
             outputs_by_channel.append(output)
 
-        # If original input was 3-D, collapse W dim (which will be 1) to return (B, C*D, L_out)
-        if x.dim() == 3:
-            # outputs_by_channel entries are (B, D, L_out, 1) -> squeeze last dim
-            outputs_by_channel = [o.squeeze(-1) for o in outputs_by_channel]  # (B, D, L_out)
-            return torch.cat(outputs_by_channel, dim=1)  # (B, C*D, L_out)
-
         # For 4-D input return (B, C*D, L_out, W)
-        return torch.cat(outputs_by_channel, dim=1)
+        return torch.cat(outputs_by_channel, dim=1) if C > 1 else output[:,0,:,:] # (B, C*D, L_out, W)
 
 
 
