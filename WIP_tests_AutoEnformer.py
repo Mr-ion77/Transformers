@@ -126,14 +126,14 @@ if __name__ == "__main__":
                         NorLatentDatasetsTensors = []
                     if PatchBool:
                         QuLatentDatasetsTensors = []
-                        QuantumLayer = qpctorch.quantum.pennylane_backend.QuantumLayer(num_qubits = p1['mlp_size'], entangle = p1['entangle'], graph = p1['connectivity'])
+                        QuantumLayer = qpctorch.quantum.pennylane_backend.QuantumLayer(num_qubits = 9, entangle = p1['entangle'], graph = p1['connectivity'])
                     if QuanvBool:
                         MoLatentDatasetsTensors = []
                         Quanvolution = QuantumConv2D(patch_size=3, stride=1, padding=1, channels_out = [4], ancilla = 0, graph= p1['connectivity'])
                     if VerticalBool:
                         VoLatentDatasetsTensors = []
-                        padding = {'Up': 1, 'Down': 1, 'Left': 0, 'Right': 0} 
-                        VerticalQuanvolution = QuantumConv1D(window_size=3, stride=1, padding=1, channels_out = [1], ancilla = 0, graph= p1['connectivity'])
+                        padding = {'Up': 1, 'Down': 1} 
+                        VerticalQuanvolution = QuantumConv1D(window_size=3, stride=1, padding=padding, channels_out = [1], ancilla = 0, graph= p1['connectivity'])
 
                     print(f'Quantum configuration is {q_config} ')
                     

@@ -24,10 +24,10 @@ def median_pad_2d(x, padding):
     flat = x.reshape(B, C, -1)
     med = flat.median(dim=-1).values  # (B, C)
 
-    Hn = H + 2 * padding['Up'] + padding['Down']
-    Wn = W + 2 * padding['Left'] + padding['Right']
+    Hn = H + padding['Up'] + padding['Down']
+    Wn = W + padding['Left'] + padding['Right']
     med_exp = med.view(B, C, 1, 1).expand(B, C, Hn, Wn).contiguous()
-    med_exp[:, :, padding['Down']:(Hn-padding['Up']), padding['Left']:(Wn-padding['Right']) ] = x
+    med_exp[:, :, padding['Down']:(H+padding['Down']), padding['Left']:(W+padding['Left']) ] = x
     
     return med_exp
 
@@ -137,9 +137,13 @@ class QuantumConv1D(nn.Module):
         self.window_size = window_size
         self.stride = stride
         if isinstance(padding, int):
-            self.padding = {'Up': padding, 'Down': padding}
+            self.padding = {'Up': padding, 'Down': padding, 'Left': 0, 'Right': 0}
         elif not isinstance(padding, dict):
             raise ValueError("Padding must be an integer or a dict of 2 integers {'Up': int, 'Down': int}.")
+        else:
+            self.padding['Left'] = 0
+            self.padding['Right'] = 0
+
         self.ancilla = ancilla
         # We'll perform median padding manually so set unfold padding to 0
         self.unfold = nn.Unfold(kernel_size=(window_size, 1), stride=(stride, 1), padding=(0, 0)) # Unfold the input to get sliding local blocks
