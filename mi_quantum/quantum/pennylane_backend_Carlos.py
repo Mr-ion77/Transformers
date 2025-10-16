@@ -17,9 +17,9 @@ class QuantumLayer(torch.nn.Module):
                 qml.Hadamard(wires=idx)
             
             # Apply entanglement using the specified weights
-           # qml.templates.BasicEntanglerLayers(weights, wires=range(num_qubits))
+            # qml.templates.BasicEntanglerLayers(weights, wires=range(num_qubits))
             qml.templates.StronglyEntanglingLayers(weights=weights, wires=range(num_qubits))
-
+            
             # Measure PauliZ expectation values for each qubit
             return [qml.expval(qml.PauliZ(wires=i)) for i in range(num_qubits)]
         
