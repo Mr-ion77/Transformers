@@ -34,7 +34,7 @@ p2 = {
 }
 
 NameOfExperiment = 'Selformer results for different quantum configurations'
-ExpID = 'none_vs_patch/select_all_second_round/CNOT'
+ExpID = 'none_vs_patch/select_all_ancilla/CNOT'
 
 if __name__ == "__main__":
     try:

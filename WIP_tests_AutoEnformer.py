@@ -135,14 +135,14 @@ if __name__ == "__main__":
                         NorLatentDatasetsTensors = []
                     if PatchBool:
                         QuLatentDatasetsTensors = []
-                        QuantumLayer = qpctorch.quantum.pennylane_backend.QuantumLayer(num_qubits = 9, graph = p1['connectivity'], entangle_method = p1['entangle_method'], ancilla = p1['ancilla'])
+                        QuantumLayer = qpctorch.quantum.pennylane_backend.QuantumLayer(num_qubits = 9, graph = p1['connectivity'], entangle_method = p1['entangle_method'])
                     if QuanvBool:
                         MoLatentDatasetsTensors = []
-                        Quanvolution = QuantumConv2D(patch_size=3, stride=1, padding=1, channels_out = [4], ancilla = 0, graph= p1['connectivity'], entangle_method= p1['entangle_method'], ancilla = p1['ancilla'])
+                        Quanvolution = QuantumConv2D(patch_size=3, stride=1, padding=1, channels_out = [4], graph= p1['connectivity'], entangle_method= p1['entangle_method'], ancilla = p1['ancilla'])
                     if VerticalBool:
                         VoLatentDatasetsTensors = []
                         padding = {'Up': 1, 'Down': 1} 
-                        VerticalQuanvolution = QuantumConv1D(window_size=3, stride=1, padding=padding, channels_out = [1], ancilla = 0, graph= p1['connectivity'], entangle_method= p1['entangle_method'], ancilla = p1['ancilla'])
+                        VerticalQuanvolution = QuantumConv1D(window_size=3, stride=1, padding=padding, channels_out = [1], graph= p1['connectivity'], entangle_method= p1['entangle_method'], ancilla = p1['ancilla'])
 
                     print(f'Quantum configuration is {q_config} ')
                     

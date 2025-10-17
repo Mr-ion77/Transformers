@@ -85,7 +85,7 @@ class QuantumLayer(torch.nn.Module):
 
             return [qml.expval(qml.PauliZ(i)) for i in range(num_qubits)]
 
-        weight_shape =  (1, 3, num_qubits) if self.entangle_method == 'SEL' else (1,)
+        weight_shape =  (1, num_qubits, 3) if self.entangle_method == 'SEL' else (1,)
 
         self.magic = qml.qnn.TorchLayer(circuit_, {"weights": weight_shape})
 

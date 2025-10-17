@@ -53,7 +53,7 @@ class QuantumKernel(nn.Module):
     
 
 class QuantumConv2D(nn.Module):
-    def __init__(self, patch_size=3, stride=1, padding=0, channels_out = [4], channels_last = False, graph= 'chain', entangle_method ='CNOT', ancilla = 0):
+    def __init__(self, patch_size=3, stride=1, padding=0, channels_out = [4], channels_last = False, graph= 'chain', entangle_method ='CNOT', ancilla = 1):
         super().__init__()
 
         if ancilla and channels_out != [-1]:
@@ -121,7 +121,7 @@ class QuantumConv2D(nn.Module):
         return torch.cat(outputs_by_channel, dim=1) if C > 1 else output[:,0,:,:] # (B, C×D, H_out, W_out)
     
 class QuantumConv1D(nn.Module):
-    def __init__(self, window_size=3, stride=1, padding=0, channels_out = [4], graph= 'chain', entangle_method = 'CNOT', ancilla = 0):
+    def __init__(self, window_size=3, stride=1, padding=0, channels_out = [4], graph= 'chain', entangle_method = 'CNOT', ancilla = 1):
         super().__init__()
 
         if ancilla and channels_out != [-1]:
