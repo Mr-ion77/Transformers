@@ -511,7 +511,7 @@ class VisionTransformer(nn.Module):
         attn_indices = rank_patches_by_attention(attn_map)
         sel_indices = attn_indices[:, :self.q_lr]               # High-attention patches
         
-        return x.gather( sel_indices.unsqueeze(-1).expand(-1, -1, x.size(-1)) ) # Shape: (batch_size, q_lr, hidden_size)
+        return x.gather(1, sel_indices.unsqueeze(-1).expand(-1, -1, x.size(-1)) ) # Shape: (batch_size, q_lr, hidden_size)
 
 
     def forward(self, x, patch_embedding_required = True):

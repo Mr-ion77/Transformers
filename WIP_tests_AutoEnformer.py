@@ -55,7 +55,7 @@ if __name__ == "__main__":
         SendToTelegramBool = True
         NExperiments = 20
         Trained_Autoencoder_Once = False # If RepeatAutoencoder is False, set this to True if you have already trained the autoencoder once and have the latent datasets saved. If False, it will train the autoencoder once and save the latent datasets for future use.
-        NameOfExperiment = 'AutoEnformer Huge Latent Dimension'
+        NameOfExperiment = 'Vertical vs Quanvolution vs None AutoEnformer on DermaMNIST'
 
         
         csv_path = '../QTransformer_Results_and_Datasets/autoenformer_results/current_results/results_grid_search.csv'
@@ -74,7 +74,7 @@ if __name__ == "__main__":
             if SendToTelegramBool and progress in progress_levels:
                 SendToTelegram(progress = progress)                
 
-            for lr in [1e-3, 2.5e-3, 5e-3]:
+            for lr in [5e-4, 1e-3, 2.5e-3, 5e-3]:
                 print(f"\n\nPoint {idx}")
                 save_path = Path(f"../QTransformer_Results_and_Datasets/autoenformer_results/current_results/grid_search{idx}")
                 save_path.mkdir(parents=True, exist_ok=True)
