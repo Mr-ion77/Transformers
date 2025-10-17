@@ -316,6 +316,7 @@ class TransformerBlock_Attention_Chosen_QMLP(nn.Module):
         self.dropout = dropout
         self.Attention_N = Attention_N
         self.special_cls = special_cls
+        self.q_stride = q_stride
         # Attention components
         self.attn_norm = nn.LayerNorm(hidden_size)
         if self.Attention_N == 2:
@@ -330,7 +331,7 @@ class TransformerBlock_Attention_Chosen_QMLP(nn.Module):
         self.mlp_norm = nn.LayerNorm(hidden_size)
 
         self.mlp_sel = FeedForward(hidden_size, mlp_hidden_size, hidden_size_out, quantum = self.quantum_mlp,
-                                    dropout = self.dropout, trainBool = self.train_q, 
+                                    dropout = self.dropout, q_stride = self.q_stride,
                                     graph = connectivity)  # Quantum MLP
 
         if attention_selection != "filter" or RD > 1:
@@ -429,7 +430,7 @@ class VisionTransformer(nn.Module):
         self.attention_selection = attention_selection
         self.starting_dim = num_channels * patch_size ** 2
         self.dropout_values = dropout
-        self.q_lr = (img_size * mlp_hidden_size) // patch_size  # Number of high-attention patches to select
+        self.q_lr = img_size // (2* patch_size)  # Number of high-attention patches to select
         self.quantum_mlp = quantum_mlp
         self.quantum_classification = quantum_classification
         self.special_cls = special_cls
@@ -561,7 +562,7 @@ class Encoder(nn.Module):
 
                     def forward(self, x, pos_embedding):
                         # Apply patch and position embeddings, including the class token
-                        
+                      
                         x += pos_embedding[:, :(x.shape[1])]
                         out = self.dropout_pos(x)
                         # Repeat x for each parallel branch
@@ -605,7 +606,7 @@ class Decoder(nn.Module):
 
             for j in range(self.num_transformer_blocks - 1):
                 out, _ = self.decoder_layers[i][j](out)  # [B, S, D], attn: [B, H, S, S] or similar #type: ignore
-            
+
             last_layer = self.decoder_layers[i][-1]
             attn_input = last_layer.attn_norm(out)
             attn_output, attn_map = last_layer.attn(attn_input)

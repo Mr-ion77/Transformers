@@ -23,7 +23,7 @@ N2 = 100  # Number of epochs Classifier
 # Hyperparams
 p1 = {
     'learning_rate': 5e-3, 'hidden_size': 48, 'dropout': {'embedding_attn': 0.125, 'after_attn': 0.175, 'feedforward': 0.125, 'embedding_pos': 0.125},
-    'num_head': 4, 'Attention_N' : 2, 'num_transf': 1, 'mlp_size': 18, 'patch_size': 4, 'weight_decay': 1e-7, 'attention_selection': 'none', 'entangle': True,
+    'num_head': 1, 'Attention_N' : 2, 'num_transf': 1, 'mlp_size': 18, 'patch_size': 4, 'weight_decay': 1e-7, 'attention_selection': 'none', 'entangle_method' : 'SEL',
     'paralel' : 1 ,'connectivity': 'chain', 'RD': 1, 'patience': -1, 'scheduler_factor': 0.999, 'q_stride': 1   # No early stopping
 }
 
@@ -33,8 +33,8 @@ p2 = {
     'RD': 1, 'special_cls' : False, 'paralel': 1, 'patience': -1, 'scheduler_factor': 0.9995, 'q_stride': 1  # No early stopping
 }
 
-NameOfExperiment = 'AutoEnformer results for None vs Vertical vs Quanvolution'
-ExpID = 'none_vs_vert_vs_quanv'
+NameOfExperiment = 'AutoEnformer results for None vs Vertical vs Quanvolution with SEL'
+ExpID = 'none_vs_vert_vs_quanv/SEL'
 
 if __name__ == "__main__":
     try:
@@ -44,7 +44,7 @@ if __name__ == "__main__":
         try:
             os.makedirs('../QTransformer_Results_and_Datasets/autoenformer_results/'+ ExpID, exist_ok = False)
         except FileExistsError:
-            print(f"Directory for experiment ID '{ExpID}' already exists. Results may be overwritten. Make sure to save this results elsewhere" 
+            raise ValueError(f"Directory for experiment ID '{ExpID}' already exists. Results may be overwritten. Make sure to save this results elsewhere" 
                     "or modify 'ExpID' to a new value if you want to keep previous results.")
 
         with open('../QTransformer_Results_and_Datasets/autoenformer_results/'+ ExpID +'/hyperparameters.json', 'w') as f:
@@ -112,8 +112,10 @@ if __name__ == "__main__":
                         patch_size=p1['patch_size'], hidden_size=p1['hidden_size'], num_heads=p1['num_head'],
                         num_transformer_blocks=p1['num_transf'], attention_selection=p1['attention_selection'],
                         mlp_hidden_size=p1['mlp_size'], Attention_N = p1['Attention_N'], dropout=p1['dropout'], 
-                        paralel = p1['paralel'],channels_last=False
+                        paralel = p1['paralel'], channels_last=False, q_stride= p1['q_stride']
                     )
+
+                    print(model1.q_stride)
 
                     # Train
                     test_mse, val_mse, params1 = qpctorch.training.train_and_evaluate(
@@ -133,14 +135,14 @@ if __name__ == "__main__":
                         NorLatentDatasetsTensors = []
                     if PatchBool:
                         QuLatentDatasetsTensors = []
-                        QuantumLayer = qpctorch.quantum.pennylane_backend.QuantumLayer(num_qubits = 9, entangle = p1['entangle'], graph = p1['connectivity'])
+                        QuantumLayer = qpctorch.quantum.pennylane_backend.QuantumLayer(num_qubits = 9, graph = p1['connectivity'], entangle_method = p1['entangle_method'])
                     if QuanvBool:
                         MoLatentDatasetsTensors = []
-                        Quanvolution = QuantumConv2D(patch_size=3, stride=1, padding=1, channels_out = [4], ancilla = 0, graph= p1['connectivity'])
+                        Quanvolution = QuantumConv2D(patch_size=3, stride=1, padding=1, channels_out = [4], ancilla = 0, graph= p1['connectivity'], entangle_method= p1['entangle_method'])
                     if VerticalBool:
                         VoLatentDatasetsTensors = []
                         padding = {'Up': 1, 'Down': 1} 
-                        VerticalQuanvolution = QuantumConv1D(window_size=3, stride=1, padding=padding, channels_out = [1], ancilla = 0, graph= p1['connectivity'])
+                        VerticalQuanvolution = QuantumConv1D(window_size=3, stride=1, padding=padding, channels_out = [1], ancilla = 0, graph= p1['connectivity'], entangle_method= p1['entangle_method'])
 
                     print(f'Quantum configuration is {q_config} ')
                     
@@ -275,11 +277,11 @@ if __name__ == "__main__":
                             **p1, **p2
                     }
 
-                    pd.DataFrame([row], columns=columns).to_csv(save_path, mode='a', header=False, index=False)
+                    pd.DataFrame([row], columns=columns).to_csv(csv_path, mode='a', header=False, index=False)
 
 
         if SendToTelegramBool:
-            SendToTelegram(csv_file = save_path, columns = ['lr', 'q_config', 'test_auc'], title = NameOfExperiment)
+            SendToTelegram(csv_file = csv_path, columns = ['lr', 'q_config', 'test_auc'], title = NameOfExperiment)
 
     except Exception as e:
          SendToTelegram(progress = progress, error_message=str(e))

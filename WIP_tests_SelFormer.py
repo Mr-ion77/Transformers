@@ -24,7 +24,7 @@ N2 = 100  # Number of epochs Classifier
 p1 = {
     'learning_rate': 0.0025, 'hidden_size': 48, 'dropout': {'embedding_attn': 0.225, 'after_attn': 0.225, 'feedforward': 0.225, 'embedding_pos': 0.225},
     'quantum' : False, 'num_head': 4, 'Attention_N' : 2, 'num_transf': 2, 'mlp_size': 12, 'patch_size': 4, 'weight_decay': 1e-7, 'attention_selection': 'filter',
-    'RD': 1, 'entangling_method' : 'CNOT', 'special_cls' : False, 'paralel': 2, 'patience': -1, 'scheduler_factor': 0.9995, 'q_stride': 1  # No early stopping
+    'RD': 1, 'entangle_method' : 'CNOT', 'special_cls' : False, 'paralel': 2, 'patience': -1, 'scheduler_factor': 0.9995, 'q_stride': 1  # No early stopping
 }
 
 p2 = {
@@ -34,7 +34,7 @@ p2 = {
 }
 
 NameOfExperiment = 'Selformer results for different quantum configurations'
-ExpID = 'none_vs_patch/mlp_size_and_entangle_method_grid_search'
+ExpID = 'none_vs_patch/select_half'
 
 if __name__ == "__main__":
     try:
@@ -83,7 +83,7 @@ if __name__ == "__main__":
                 SendToTelegram(progress = progress)                
 
             print(f"\n\nPoint {idx}")
-            save_path = Path("../QTransformer_Results_and_Datasets/selformer_results/" + ExpID + f"/grid_search{idx}")
+            save_path = Path(f"../QTransformer_Results_and_Datasets/selformer_results/current_results/grid_search{idx}")
             save_path.mkdir(parents=True, exist_ok=True)
             os.makedirs(save_path / 'autoencoder', exist_ok=True)
 
@@ -111,8 +111,8 @@ if __name__ == "__main__":
                     img_size=shape[-1], num_channels=shape[0], num_classes=num_classes,
                     patch_size=p1['patch_size'], hidden_size= shape[0]* p1['patch_size']**2, num_heads=p1['num_head'], Attention_N = p1['Attention_N'],
                     num_transformer_blocks=p1['num_transf'], attention_selection= p1['attention_selection'], special_cls = p1['special_cls'], 
-                    mlp_hidden_size=p1['mlp_size'], quantum_mlp = False, dropout = p1['dropout'], channels_last=False, entangle=False, quantum_classification = False,
-                    paralel = p1['paralel'], RD = p1['RD'], train_q = False, q_stride = p1['q_stride'], connectivity = 'chain'
+                    mlp_hidden_size=p1['mlp_size'], quantum_mlp = False, dropout = p1['dropout'], channels_last=False, quantum_classification = False,
+                    paralel = p1['paralel'], RD = p1['RD'], q_stride = p1['q_stride'], connectivity = 'chain'
                 )
 
                 # Train second model
@@ -134,7 +134,7 @@ if __name__ == "__main__":
                     QuLatentDatasetsTensors = []
                     padding = {'Up': 1, 'Down': 0, 'Left': 1, 'Right': 0}
                     Quanvolution = qpctorch.quantum.quanvolution.QuantumConv2D(
-                        patch_size=2, stride=1, padding=padding, channels_out = [3], graph = 'chain', entangle_method = p1['entangling_method'], ancilla = 0
+                        patch_size=2, stride=1, padding=padding, channels_out = [3], graph = 'chain', entangle_method = p1['entangle_method'], ancilla = 0
                         ).to(device)
 
 
@@ -217,8 +217,8 @@ if __name__ == "__main__":
                         img_size=shape[-1], num_channels=shape[0], num_classes=num_classes,
                         patch_size=p2['patch_size'], hidden_size= shape[0]* p2['patch_size']**2, num_heads=p2['num_head'], Attention_N = p2['Attention_N'],
                         num_transformer_blocks=p2['num_transf'], attention_selection= p2['attention_selection'], special_cls = p2['special_cls'], 
-                        mlp_hidden_size=p2['mlp_size'], quantum_mlp = False, dropout = p2['dropout'], channels_last=False, entangle=False, quantum_classification = False,
-                        paralel = p2['paralel'], RD = p2['RD'], train_q = False, q_stride = p2['q_stride'], connectivity = 'chain'
+                        mlp_hidden_size=p2['mlp_size'], quantum_mlp = False, dropout = p2['dropout'], channels_last=False, quantum_classification = False,
+                        paralel = p2['paralel'], RD = p2['RD'], q_stride = p2['q_stride'], connectivity = 'chain'
                     )
 
                     print('\nTraining second model: classifier ViT on latent representations\n')
@@ -241,12 +241,12 @@ if __name__ == "__main__":
                     }
 
                     pd.DataFrame([row], columns=columns).to_csv(
-                        save_path, mode='a', header=False, index=False
+                        csv_path, mode='a', header=False, index=False
                     )
 
 
         if SendToTelegramBool:
-            SendToTelegram(csv_file = save_path, columns = ['q_config', 'test_auc'],
+            SendToTelegram(csv_file = csv_path, columns = ['q_config', 'test_auc'],
                            title = 'Selformer results for different configurations')
 
     except Exception as e:

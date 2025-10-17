@@ -37,6 +37,11 @@ if __name__ == "__main__":
         # Save dictionary with all the hyperparameters and results in a json file
         progress = 0
         os.makedirs('../QTransformer_Results_and_Datasets/derma_results/current_results', exist_ok = True)
+        try:
+            os.makedirs('../QTransformer_Results_and_Datasets/derma_results/'+ ExpID, exist_ok = False)
+        except FileExistsError:
+            print(f"Directory for experiment ID '{ExpID}' already exists. Results may be overwritten. Make sure to save this results elsewhere" 
+                    "or modify 'ExpID' to a new value if you want to keep previous results.")
 
         with open('../QTransformer_Results_and_Datasets/derma_results/'+ ExpID +'/hyperparameters.json', 'w') as f:
             f.write('\nHyperparameters for Transformer\n')
@@ -52,7 +57,7 @@ if __name__ == "__main__":
         NExperiments = 20
 
         
-        csv_path = '../QTransformer_Results_and_Datasets/derma_results/current_results/results_grid_search.csv'
+        csv_path = '../QTransformer_Results_and_Datasets/derma_results/'+ ExpID + '/results_grid_search.csv'
         if not os.path.exists(csv_path):
             df = pd.DataFrame(columns=columns)
             df.to_csv(csv_path, mode='a', header=True, index=False)
@@ -89,8 +94,8 @@ if __name__ == "__main__":
                     img_size=shape[-1], num_channels=shape[0], num_classes=num_classes,
                     patch_size=p['patch_size'], hidden_size= shape[0]* p['patch_size']**2, num_heads=p['num_head'], Attention_N = p['Attention_N'],
                     num_transformer_blocks=p['num_transf'], attention_selection= p['attention_selection'], special_cls = p['special_cls'], 
-                    mlp_hidden_size=p['mlp_size'], quantum_mlp = q_config, dropout = p['dropout'], channels_last=False, entangle=True, quantum_classification = False,
-                    paralel = p['paralel'], RD = p['RD'], train_q = False, q_stride = p['q_stride'], connectivity = p['connectivity']
+                    mlp_hidden_size=p['mlp_size'], quantum_mlp = q_config, dropout = p['dropout'], channels_last=False, quantum_classification = False,
+                    paralel = p['paralel'], RD = p['RD'], q_stride = p['q_stride'], connectivity = p['connectivity']
                 )
 
                 # Train model
@@ -115,12 +120,12 @@ if __name__ == "__main__":
                 }
 
                 pd.DataFrame([row], columns=columns).to_csv(
-                    '../QTransformer_Results_and_Datasets/derma_results/current_results/results_grid_search.csv', mode='a', header=False, index=False
+                    csv_path, mode='a', header=False, index=False
                 )
 
 
         if SendToTelegramBool:
-            SendToTelegram(csv_file = "../QTransformer_Results_and_Datasets/derma_results/current_results/results_grid_search.csv", columns = ['special_cls', 'test_auc'])
+            SendToTelegram(csv_file = csv_path, columns = ['special_cls', 'test_auc'], title=NameOfExperiment)
 
     except Exception as e:
          SendToTelegram(progress = progress, error_message=str(e))

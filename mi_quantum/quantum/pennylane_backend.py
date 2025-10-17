@@ -75,14 +75,13 @@ class QuantumLayer(torch.nn.Module):
 
             qml.AngleEmbedding(inputs, wires=range(num_qubits), rotation='Y')
 
-            if self.entangle:
-                for i, pair in enumerate(self.graph): 
-                    if self.entangle_method == 'CNOT':    
-                        qml.CNOT(wires=[pair[0], pair[1]])
-                    elif self.entangle_method == 'CRX':
-                        qml.CRX(np.pi/3, wires=[pair[0], pair[1]]) 
-                    elif self.entangle_method == 'SEL': # Stands for StronglyEntanglingLayers
-                        qml.StronglyEntanglingLayers(weights, wires=range(num_qubits), ranges = [1])
+            for i, pair in enumerate(self.graph): 
+                if self.entangle_method == 'CNOT':    
+                    qml.CNOT(wires=[pair[0], pair[1]])
+                elif self.entangle_method == 'CRX':
+                    qml.CRX(np.pi/3, wires=[pair[0], pair[1]]) 
+                elif self.entangle_method == 'SEL': # Stands for StronglyEntanglingLayers
+                    qml.StronglyEntanglingLayers(weights, wires=range(num_qubits), ranges = [1])
 
             return [qml.expval(qml.PauliZ(i)) for i in range(num_qubits)]
 
@@ -93,6 +92,7 @@ class QuantumLayer(torch.nn.Module):
         # Freeze weights (non-trainable) (just in case, although it should'nt be necessary except in SEL case)
 
         for param in self.magic.qnode_weights.values():
+            param.data.zero_()
             param.requires_grad = False
 
 
