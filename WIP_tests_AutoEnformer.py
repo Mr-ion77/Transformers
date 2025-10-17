@@ -24,13 +24,13 @@ N2 = 100  # Number of epochs Classifier
 p1 = {
     'learning_rate': 5e-3, 'hidden_size': 48, 'dropout': {'embedding_attn': 0.125, 'after_attn': 0.175, 'feedforward': 0.125, 'embedding_pos': 0.125},
     'num_head': 1, 'Attention_N' : 2, 'num_transf': 1, 'mlp_size': 18, 'patch_size': 4, 'weight_decay': 1e-7, 'attention_selection': 'none', 'entangle_method' : 'SEL',
-    'paralel' : 1 ,'connectivity': 'chain', 'RD': 1, 'patience': -1, 'scheduler_factor': 0.999, 'q_stride': 1   # No early stopping
+    'paralel' : 1 ,'connectivity': 'chain', 'RD': 1, 'patience': -1, 'scheduler_factor': 0.999, 'q_stride': 1, 'ancilla' : 1
 }
 
 p2 = {
     'learning_rate': 0.0025, 'hidden_size': 18, 'dropout': {'embedding_attn': 0.15, 'after_attn': 0.175, 'feedforward': 0.15, 'embedding_pos': 0.15},
     'quantum' : False, 'num_head': 1, 'Attention_N' : 2, 'num_transf': 4, 'mlp_size': 18, 'patch_size': 4, 'weight_decay': 1e-7, 'attention_selection': 'none',
-    'RD': 1, 'special_cls' : False, 'paralel': 1, 'patience': -1, 'scheduler_factor': 0.9995, 'q_stride': 1  # No early stopping
+    'RD': 1, 'special_cls' : False, 'paralel': 1, 'patience': -1, 'scheduler_factor': 0.9995, 'q_stride': 1
 }
 
 NameOfExperiment = 'AutoEnformer results for None vs Vertical vs Quanvolution with SEL'
@@ -135,14 +135,14 @@ if __name__ == "__main__":
                         NorLatentDatasetsTensors = []
                     if PatchBool:
                         QuLatentDatasetsTensors = []
-                        QuantumLayer = qpctorch.quantum.pennylane_backend.QuantumLayer(num_qubits = 9, graph = p1['connectivity'], entangle_method = p1['entangle_method'])
+                        QuantumLayer = qpctorch.quantum.pennylane_backend.QuantumLayer(num_qubits = 9, graph = p1['connectivity'], entangle_method = p1['entangle_method'], ancilla = p1['ancilla'])
                     if QuanvBool:
                         MoLatentDatasetsTensors = []
-                        Quanvolution = QuantumConv2D(patch_size=3, stride=1, padding=1, channels_out = [4], ancilla = 0, graph= p1['connectivity'], entangle_method= p1['entangle_method'])
+                        Quanvolution = QuantumConv2D(patch_size=3, stride=1, padding=1, channels_out = [4], ancilla = 0, graph= p1['connectivity'], entangle_method= p1['entangle_method'], ancilla = p1['ancilla'])
                     if VerticalBool:
                         VoLatentDatasetsTensors = []
                         padding = {'Up': 1, 'Down': 1} 
-                        VerticalQuanvolution = QuantumConv1D(window_size=3, stride=1, padding=padding, channels_out = [1], ancilla = 0, graph= p1['connectivity'], entangle_method= p1['entangle_method'])
+                        VerticalQuanvolution = QuantumConv1D(window_size=3, stride=1, padding=padding, channels_out = [1], ancilla = 0, graph= p1['connectivity'], entangle_method= p1['entangle_method'], ancilla = p1['ancilla'])
 
                     print(f'Quantum configuration is {q_config} ')
                     

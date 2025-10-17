@@ -23,18 +23,18 @@ N2 = 100  # Number of epochs Classifier
 # Hyperparams
 p1 = {
     'learning_rate': 0.0025, 'hidden_size': 48, 'dropout': {'embedding_attn': 0.225, 'after_attn': 0.225, 'feedforward': 0.225, 'embedding_pos': 0.225},
-    'quantum' : False, 'num_head': 4, 'Attention_N' : 2, 'num_transf': 2, 'mlp_size': 12, 'patch_size': 4, 'weight_decay': 1e-7, 'attention_selection': 'filter',
-    'RD': 1, 'entangle_method' : 'CNOT', 'special_cls' : False, 'paralel': 2, 'patience': -1, 'scheduler_factor': 0.9995, 'q_stride': 1  # No early stopping
-}
+    'quantum' : False, 'num_head': 4, 'Attention_N' : 2, 'num_transf': 2, 'mlp_size': 12, 'patch_size': 4, 'weight_decay': 1e-7, 'attention_selection': 'filter', 
+    'selection_amount': 49, 'RD': 1, 'entangle_method' : 'CNOT', 'special_cls' : False, 'paralel': 2, 'patience': -1, 'scheduler_factor': 0.9995, 'q_stride': 1,
+    'ancilla' : 0}
 
 p2 = {
-        'learning_rate': 0.0025, 'hidden_size': 48, 'dropout': {'embedding_attn': 0.225, 'after_attn': 0.225, 'feedforward': 0.225, 'embedding_pos': 0.225},
+    'learning_rate': 0.0025, 'hidden_size': 48, 'dropout': {'embedding_attn': 0.225, 'after_attn': 0.225, 'feedforward': 0.225, 'embedding_pos': 0.225},
     'quantum' : False, 'num_head': 4, 'Attention_N' : 2, 'num_transf': 2, 'mlp_size': 12, 'patch_size': 4, 'weight_decay': 1e-7, 'attention_selection': 'filter',
     'RD': 1, 'special_cls' : False, 'paralel': 2, 'patience': -1, 'scheduler_factor': 0.9995, 'q_stride': 1  # No early stopping
 }
 
 NameOfExperiment = 'Selformer results for different quantum configurations'
-ExpID = 'none_vs_patch/select_half'
+ExpID = 'none_vs_patch/select_all_second_round/CNOT'
 
 if __name__ == "__main__":
     try:
@@ -110,7 +110,7 @@ if __name__ == "__main__":
                 model1 = qpctorch.quantum.vit.VisionTransformer(
                     img_size=shape[-1], num_channels=shape[0], num_classes=num_classes,
                     patch_size=p1['patch_size'], hidden_size= shape[0]* p1['patch_size']**2, num_heads=p1['num_head'], Attention_N = p1['Attention_N'],
-                    num_transformer_blocks=p1['num_transf'], attention_selection= p1['attention_selection'], special_cls = p1['special_cls'], 
+                    num_transformer_blocks=p1['num_transf'], attention_selection= p1['attention_selection'], selection_amount = p1['selection_amount'], special_cls = p1['special_cls'], 
                     mlp_hidden_size=p1['mlp_size'], quantum_mlp = False, dropout = p1['dropout'], channels_last=False, quantum_classification = False,
                     paralel = p1['paralel'], RD = p1['RD'], q_stride = p1['q_stride'], connectivity = 'chain'
                 )
@@ -134,7 +134,7 @@ if __name__ == "__main__":
                     QuLatentDatasetsTensors = []
                     padding = {'Up': 1, 'Down': 0, 'Left': 1, 'Right': 0}
                     Quanvolution = qpctorch.quantum.quanvolution.QuantumConv2D(
-                        patch_size=2, stride=1, padding=padding, channels_out = [3], graph = 'chain', entangle_method = p1['entangle_method'], ancilla = 0
+                        patch_size=2, stride=1, padding=padding, channels_out = [-1], graph = 'chain', entangle_method = p1['entangle_method'], ancilla = p1['ancilla']
                         ).to(device)
 
 
@@ -213,6 +213,9 @@ if __name__ == "__main__":
                 for config in list(q_config):
                     config_dataset = Latents[config]
                     shape2 = config_dataset[-1]  # Shape of one sample in the test set
+                    print(f'Latent shape of the dataset is: {shape2}')
+                    print(f'Latent shape of the dataset is: {shape2}')
+                    print(f'Latent shape of the dataset is: {shape2}')
                     model2 = qpctorch.quantum.vit.VisionTransformer(
                         img_size=shape[-1], num_channels=shape[0], num_classes=num_classes,
                         patch_size=p2['patch_size'], hidden_size= shape[0]* p2['patch_size']**2, num_heads=p2['num_head'], Attention_N = p2['Attention_N'],

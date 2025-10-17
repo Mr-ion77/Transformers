@@ -409,7 +409,7 @@ class TransformerBlock_Attention_Chosen_QMLP(nn.Module):
 class VisionTransformer(nn.Module):
     def __init__(self, img_size, num_channels, num_classes, patch_size, hidden_size, num_heads, num_transformer_blocks, mlp_hidden_size, Attention_N = 2,
                     quantum_mlp = False, quantum_classification = False, dropout= {'embedding_attn': 0.225, 'after_attn': 0.225, 'feedforward': 0.225, 'embedding_pos': 0.225}, 
-                    channels_last=False, RD = 1, attention_selection = 'filter', special_cls = False,
+                    channels_last=False, RD = 1, attention_selection = 'filter', selection_amount = None, special_cls = False,
                     paralel = 1, q_stride = 1, connectivity = 'chain'
                     ):
         super().__init__()
@@ -430,7 +430,8 @@ class VisionTransformer(nn.Module):
         self.attention_selection = attention_selection
         self.starting_dim = num_channels * patch_size ** 2
         self.dropout_values = dropout
-        self.q_lr = img_size // (2* patch_size)  # Number of high-attention patches to select
+        num_patches = (img_size // patch_size)**2
+        self.q_lr = img_size // (2* patch_size) if selection_amount == None else min(selection_amount, num_patches) # Number of high-attention patches to select
         self.quantum_mlp = quantum_mlp
         self.quantum_classification = quantum_classification
         self.special_cls = special_cls
@@ -446,7 +447,7 @@ class VisionTransformer(nn.Module):
             kernel_size=patch_size,
             stride=patch_size
         )
-        num_patches = (img_size // patch_size)**2
+        
 
         self.cls_token = nn.Parameter(torch.zeros(1, 1, hidden_size))
         num_steps = 1 + num_patches
