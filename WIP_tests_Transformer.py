@@ -27,6 +27,9 @@ p = {
     'RD': 1, 'special_cls' : False, 'paralel': 2, 'patience': -1, 'scheduler_factor': 0.998, 'q_stride': 4, 'connectivity': 'david_star'  # No early stopping
 }
 
+NameOfExperiment = 'Transformer results for different configurations'
+ExpID = 'normal_vs_modified_attn'
+
 num_classes = 7
 
 if __name__ == "__main__":
@@ -35,7 +38,7 @@ if __name__ == "__main__":
         progress = 0
         os.makedirs('../QTransformer_Results_and_Datasets/derma_results/current_results', exist_ok = True)
 
-        with open('../QTransformer_Results_and_Datasets/derma_results/current_results/hyperparameters.json', 'w') as f:
+        with open('../QTransformer_Results_and_Datasets/derma_results/'+ ExpID +'/hyperparameters.json', 'w') as f:
             f.write('\nHyperparameters for Transformer\n')
             json.dump(p, f, indent=4)
             

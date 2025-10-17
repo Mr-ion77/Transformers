@@ -33,14 +33,21 @@ p2 = {
     'RD': 1, 'special_cls' : False, 'paralel': 1, 'patience': -1, 'scheduler_factor': 0.9995, 'q_stride': 1  # No early stopping
 }
 
+NameOfExperiment = 'AutoEnformer results for None vs Vertical vs Quanvolution'
+ExpID = 'none_vs_vert_vs_quanv'
 
 if __name__ == "__main__":
     try:
         # Save dictionary with all the hyperparameters and results in a json file
         progress = 0
         os.makedirs('../QTransformer_Results_and_Datasets/autoenformer_results/current_results', exist_ok = True)
+        try:
+            os.makedirs('../QTransformer_Results_and_Datasets/autoenformer_results/'+ ExpID, exist_ok = False)
+        except FileExistsError:
+            print(f"Directory for experiment ID '{ExpID}' already exists. Results may be overwritten. Make sure to save this results elsewhere" 
+                    "or modify 'ExpID' to a new value if you want to keep previous results.")
 
-        with open('../QTransformer_Results_and_Datasets/autoenformer_results/current_results/hyperparameters.json', 'w') as f:
+        with open('../QTransformer_Results_and_Datasets/autoenformer_results/'+ ExpID +'/hyperparameters.json', 'w') as f:
             f.write('\nHyperparameters for Autoencoder\n')
             json.dump(p1, f, indent=4)
             f.write('\nHyperparameters for Classifier\n')  # Separator text between dictionaries
@@ -55,10 +62,10 @@ if __name__ == "__main__":
         SendToTelegramBool = True
         NExperiments = 20
         Trained_Autoencoder_Once = False # If RepeatAutoencoder is False, set this to True if you have already trained the autoencoder once and have the latent datasets saved. If False, it will train the autoencoder once and save the latent datasets for future use.
-        NameOfExperiment = 'Vertical vs Quanvolution vs None AutoEnformer on DermaMNIST'
+
 
         
-        csv_path = '../QTransformer_Results_and_Datasets/autoenformer_results/current_results/results_grid_search.csv'
+        csv_path = '../QTransformer_Results_and_Datasets/autoenformer_results/'+ ExpID +'/results_grid_search.csv'
         if not os.path.exists(csv_path):
             df = pd.DataFrame(columns=columns)
             df.to_csv(csv_path, mode='a', header=True, index=False)
@@ -268,13 +275,11 @@ if __name__ == "__main__":
                             **p1, **p2
                     }
 
-                    pd.DataFrame([row], columns=columns).to_csv(
-                        '../QTransformer_Results_and_Datasets/autoenformer_results/current_results/results_grid_search.csv', mode='a', header=False, index=False
-                    )
+                    pd.DataFrame([row], columns=columns).to_csv(save_path, mode='a', header=False, index=False)
 
 
         if SendToTelegramBool:
-            SendToTelegram(csv_file = "../QTransformer_Results_and_Datasets/autoenformer_results/current_results/results_grid_search.csv", columns = ['lr', 'q_config', 'test_auc'], title = NameOfExperiment)
+            SendToTelegram(csv_file = save_path, columns = ['lr', 'q_config', 'test_auc'], title = NameOfExperiment)
 
     except Exception as e:
          SendToTelegram(progress = progress, error_message=str(e))

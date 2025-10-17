@@ -33,7 +33,7 @@ def median_pad_2d(x, padding):
 
 
 class QuantumKernel(nn.Module):
-    def __init__(self, circuit, channels_out = [-1], ancilla = 1):
+    def __init__(self, circuit, channels_out = [-1], ancilla = 0):
         super().__init__()
         self.circuit = circuit
         self.channels_out = channels_out if ancilla == 0 else list(range(-1, -ancilla - 1, -1))
@@ -53,7 +53,7 @@ class QuantumKernel(nn.Module):
     
 
 class QuantumConv2D(nn.Module):
-    def __init__(self, patch_size=3, stride=1, padding=0, channels_out = [4], channels_last = False, graph= 'chain', ancilla = 1):
+    def __init__(self, patch_size=3, stride=1, padding=0, channels_out = [4], channels_last = False, graph= 'chain', entangle_method ='CNOT', ancilla = 0):
         super().__init__()
 
         if ancilla and channels_out != [-1]:
@@ -121,15 +121,16 @@ class QuantumConv2D(nn.Module):
         return torch.cat(outputs_by_channel, dim=1) if C > 1 else output[:,0,:,:] # (B, C×D, H_out, W_out)
     
 class QuantumConv1D(nn.Module):
-    def __init__(self, window_size=3, stride=1, padding=0, channels_out = [4], graph= 'chain', ancilla = 1):
+    def __init__(self, window_size=3, stride=1, padding=0, channels_out = [4], graph= 'chain', entangle_method = 'CNOT', ancilla = 0):
         super().__init__()
 
         if ancilla and channels_out != [-1]:
             print(f'Please be ware that when ancilla is set to True channels_out must be [-1], but got {channels_out}. Automatically setting channels_out to [-1]')
 
         self.channels_out = channels_out if not ancilla else [-1]
+        self.entangle_method = entangle_method
         self.kernel = QuantumKernel(
-            circuit = QuantumLayer(num_qubits = window_size + ancilla, graph = graph),
+            circuit = QuantumLayer(num_qubits = window_size + ancilla, graph = graph, entangle_method=entangle_method),
             channels_out = channels_out, ancilla = ancilla
         )
 

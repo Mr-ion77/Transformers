@@ -33,14 +33,21 @@ p2 = {
     'RD': 1, 'special_cls' : False, 'paralel': 2, 'patience': -1, 'scheduler_factor': 0.9995, 'q_stride': 1  # No early stopping
 }
 
+NameOfExperiment = 'Selformer results for different quantum configurations'
+ExpID = 'none_vs_patch/mlp_size_and_entangle_method_grid_search'
 
 if __name__ == "__main__":
     try:
         # Save dictionary with all the hyperparameters and results in a json file
         progress = 0
         os.makedirs('../QTransformer_Results_and_Datasets/selformer_results/current_results', exist_ok = True)
+        try:
+            os.makedirs('../QTransformer_Results_and_Datasets/selformer_results/'+ ExpID, exist_ok = False)
+        except FileExistsError:
+            print(f"Directory for experiment ID '{ExpID}' already exists. Results may be overwritten. Make sure to save this results elsewhere" 
+                    "or modify 'ExpID' to a new value if you want to keep previous results.")
 
-        with open('../QTransformer_Results_and_Datasets/selformer_results/current_results/hyperparameters.json', 'w') as f:
+        with open('../QTransformer_Results_and_Datasets/selformer_results/'+ ExpID +'/hyperparameters.json', 'w') as f:
             f.write('\nHyperparameters for Autoencoder\n')
             json.dump(p1, f, indent=4)
             f.write('\nHyperparameters for Classifier\n')  # Separator text between dictionaries
@@ -58,7 +65,7 @@ if __name__ == "__main__":
         num_classes = 7
         Trained_Selector_Once = False   
         
-        csv_path = '../QTransformer_Results_and_Datasets/selformer_results/current_results/results_grid_search.csv'
+        csv_path = '../QTransformer_Results_and_Datasets/selformer_results/' + ExpID + '/results_grid_search.csv'
         if not os.path.exists(csv_path):
             df = pd.DataFrame(columns=columns)
             df.to_csv(csv_path, mode='a', header=True, index=False)
@@ -76,7 +83,7 @@ if __name__ == "__main__":
                 SendToTelegram(progress = progress)                
 
             print(f"\n\nPoint {idx}")
-            save_path = Path(f"../QTransformer_Results_and_Datasets/selformer_results/current_results/grid_search{idx}")
+            save_path = Path("../QTransformer_Results_and_Datasets/selformer_results/" + ExpID + f"/grid_search{idx}")
             save_path.mkdir(parents=True, exist_ok=True)
             os.makedirs(save_path / 'autoencoder', exist_ok=True)
 
@@ -126,7 +133,9 @@ if __name__ == "__main__":
                 if PatchBool:
                     QuLatentDatasetsTensors = []
                     padding = {'Up': 1, 'Down': 0, 'Left': 1, 'Right': 0}
-                    Quanvolution = qpctorch.quantum.quanvolution.QuantumConv2D(patch_size=2, stride=1, padding=padding, channels_out = [3], graph = 'chain')
+                    Quanvolution = qpctorch.quantum.quanvolution.QuantumConv2D(
+                        patch_size=2, stride=1, padding=padding, channels_out = [3], graph = 'chain', entangle_method = p1['entangling_method'], ancilla = 0
+                        ).to(device)
 
 
                 print(f'Quantum configuration is {q_config} ')
@@ -148,28 +157,19 @@ if __name__ == "__main__":
                                 normal_outs = []
                             if PatchBool:
                                 quantum_outs = []
-                                                
-                            for i in range(p1['paralel']):
 
-                                selected_patches = model1.get_patches_by_attention(x = images, paralel_branch = i)
+                            selected_patches = model1.get_patches_by_attention(x = images, paralel_branch = 0)
 
-                                if NoneBool:
-                                    normal_outs.append( selected_patches.cpu() )   
-                                if PatchBool:
-                                    # Reshape patches to fit quanvolution input
-                                    aux_patches = selected_patches.view(-1, num_channels, p1['patch_size'], p1['patch_size'])  # (B * num_patches, C, patch_size, patch_size)
-                                    aux_patch_outs = Quanvolution(aux_patches)  # (B * num_patches, C, H_out, W_out)
-                                    latent_patch_aux = aux_patch_outs.view(selected_patches.size(0), -1, aux_patch_outs.size(1))  # (B, num_patches, new_patch_dim)
-                                    quantum_outs.append( latent_patch_aux.cpu() )
+                            if NoneBool:
+                                all_latents_normal.extend( selected_patches.cpu() )   
+                            if PatchBool:
+                                # Reshape patches to fit quanvolution input
+                                aux_patches = selected_patches.view(-1, num_channels, p1['patch_size'], p1['patch_size'])  # (B * num_patches, C, patch_size, patch_size)
+                                aux_patch_outs = Quanvolution(aux_patches)  # (B * num_patches, C, H_out, W_out)
+                                latent_patch_aux = aux_patch_outs.view(selected_patches.size(0), -1, aux_patch_outs.size(1))  # (B, num_patches, new_patch_dim)
+                                all_latents_quantum.extend( latent_patch_aux.cpu() )
 
-
-                        all_labels.extend( labels )
-                        if NoneBool:
-                            normal_representations = torch.cat(normal_outs, dim = -1).cpu()  
-                            all_latents_normal.extend(normal_representations) 
-                        if PatchBool:
-                            quantum_representations = torch.cat(quantum_outs, dim = -1).cpu()        
-                            all_latents_quantum.extend( quantum_representations )
+                            all_labels.extend( labels )
 
 
                     all_labels = torch.tensor(all_labels)
@@ -241,14 +241,14 @@ if __name__ == "__main__":
                     }
 
                     pd.DataFrame([row], columns=columns).to_csv(
-                        '../QTransformer_Results_and_Datasets/selformer_results/current_results/results_grid_search.csv', mode='a', header=False, index=False
+                        save_path, mode='a', header=False, index=False
                     )
 
 
         if SendToTelegramBool:
-            SendToTelegram(csv_file = "../QTransformer_Results_and_Datasets/selformer_results/current_results/results_grid_search.csv", columns = ['q_config', 'test_auc'])
+            SendToTelegram(csv_file = save_path, columns = ['q_config', 'test_auc'],
+                           title = 'Selformer results for different configurations')
 
     except Exception as e:
          SendToTelegram(progress = progress, error_message=str(e))
          print(str(e))
-
