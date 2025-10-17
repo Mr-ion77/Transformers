@@ -53,7 +53,7 @@ class QuantumKernel(nn.Module):
     
 
 class QuantumConv2D(nn.Module):
-    def __init__(self, patch_size=3, stride=1, padding=0, channels_out = [4], channels_last = False, graph= 'chain', ancilla = 1, trainBool = False):
+    def __init__(self, patch_size=3, stride=1, padding=0, channels_out = [4], channels_last = False, graph= 'chain', ancilla = 1):
         super().__init__()
 
         if ancilla and channels_out != [-1]:
@@ -61,10 +61,10 @@ class QuantumConv2D(nn.Module):
 
         self.channels_out = channels_out if not ancilla else [-1]
         self.kernel = QuantumKernel(
-            circuit = QuantumLayer(num_qubits = patch_size**2 + ancilla, entangle = True, graph = graph, trainBool = False),
+            circuit = QuantumLayer(num_qubits = patch_size**2 + ancilla, graph = graph),
             channels_out = channels_out, ancilla = ancilla
         )
-        self.trainBool = trainBool
+
         self.patch_size = patch_size
         self.stride = stride
         self.padding = padding
@@ -108,8 +108,7 @@ class QuantumConv2D(nn.Module):
                 raise ValueError(f"Expected input dim {self.kernel.circuit.num_qubits - self.ancilla}, got {patch_vectors.shape[1]}")
 
             # Process with the Kernel — ideally batched
-            with torch.set_grad_enabled(self.kernel.circuit.trainBool):
-                kernel_out = self.kernel(patch_vectors)  # expected output: (B*L, out_dim)
+            kernel_out = self.kernel(patch_vectors)  # expected output: (B*L, out_dim)
 
             # Reshape back to (B, L, out_dim)
             kernel_out = kernel_out.view(B, -1, kernel_out.shape[-1])  # (B, L, D)
@@ -122,7 +121,7 @@ class QuantumConv2D(nn.Module):
         return torch.cat(outputs_by_channel, dim=1) if C > 1 else output[:,0,:,:] # (B, C×D, H_out, W_out)
     
 class QuantumConv1D(nn.Module):
-    def __init__(self, window_size=3, stride=1, padding=0, channels_out = [4], graph= 'chain', ancilla = 1, trainBool = False):
+    def __init__(self, window_size=3, stride=1, padding=0, channels_out = [4], graph= 'chain', ancilla = 1):
         super().__init__()
 
         if ancilla and channels_out != [-1]:
@@ -130,10 +129,10 @@ class QuantumConv1D(nn.Module):
 
         self.channels_out = channels_out if not ancilla else [-1]
         self.kernel = QuantumKernel(
-            circuit = QuantumLayer(num_qubits = window_size + ancilla, entangle = True, graph = graph, trainBool = False),
+            circuit = QuantumLayer(num_qubits = window_size + ancilla, graph = graph),
             channels_out = channels_out, ancilla = ancilla
         )
-        self.trainBool = trainBool
+
         self.window_size = window_size
         self.stride = stride
         self.padding = padding
@@ -200,8 +199,7 @@ class QuantumConv1D(nn.Module):
                 raise ValueError(f"Expected input dim {self.kernel.circuit.num_qubits - self.ancilla}, got {patch_vectors.shape[1]}")
 
             # Process with the Kernel — batched over all patches and columns
-            with torch.set_grad_enabled(self.kernel.circuit.trainBool):
-                kernel_out = self.kernel(patch_vectors)  # (B*L_out*W, D)
+            kernel_out = self.kernel(patch_vectors)  # (B*L_out*W, D)
 
             D = kernel_out.shape[-1]
 

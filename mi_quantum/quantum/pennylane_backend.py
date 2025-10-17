@@ -7,14 +7,12 @@ class QuantumLayer(torch.nn.Module):
     def __init__(
         self,
         num_qubits,
-        entangle=True,
-        trainBool=False,
-        graph='chain'
+        graph='chain',
+        entangle_method='CNOT'
     ):
         super().__init__()
-        self.trainBool = trainBool
         self.num_qubits = num_qubits
-        self.entangle = entangle
+        self.entangle_method = entangle_method
         self.graph_list = {
 
                     2: {
@@ -78,23 +76,24 @@ class QuantumLayer(torch.nn.Module):
             qml.AngleEmbedding(inputs, wires=range(num_qubits), rotation='Y')
 
             if self.entangle:
-                for i, pair in enumerate(self.graph):     
-                    qml.CNOT(wires=[pair[0], pair[1]])
-                    #qml.CRX(np.pi/3 if not self.trainBool else weights[num_qubits*3 + i], wires=[pair[0], pair[1]]) 
-
-            #qml.StronglyEntanglingLayers(weights, wires=range(num_qubits), ranges = [1])
+                for i, pair in enumerate(self.graph): 
+                    if self.entangle_method == 'CNOT':    
+                        qml.CNOT(wires=[pair[0], pair[1]])
+                    elif self.entangle_method == 'CRX':
+                        qml.CRX(np.pi/3, wires=[pair[0], pair[1]]) 
+                    elif self.entangle_method == 'SEL': # Stands for StronglyEntanglingLayers
+                        qml.StronglyEntanglingLayers(weights, wires=range(num_qubits), ranges = [1])
 
             return [qml.expval(qml.PauliZ(i)) for i in range(num_qubits)]
 
-        #qlayer = qml.QNode(circuit_, dev, interface="torch", diff_method="backprop")
-        weight_shape = (num_qubits * 3 + entangle *  len(self.graph),) if trainBool else (1,)
+        weight_shape =  (1, 3, num_qubits) if self.entangle_method == 'SEL' else (1,)
 
         self.magic = qml.qnn.TorchLayer(circuit_, {"weights": weight_shape})
 
-        # Freeze weights (non-trainable)
-        if not self.trainBool:
-            for param in self.magic.qnode_weights.values():
-                param.requires_grad = False
+        # Freeze weights (non-trainable) (just in case, although it should'nt be necessary except in SEL case)
+
+        for param in self.magic.qnode_weights.values():
+            param.requires_grad = False
 
 
     def forward(self, inputs):

@@ -245,11 +245,10 @@ class MultiheadSelfAttention(nn.Module):
 
 class FeedForward(nn.Module):
     def __init__(self, hidden_size, mlp_hidden_size, hidden_size_out , quantum = True, dropout={'embedding_attn': 0.225, 'after_attn': 0.225, 'feedforward': 0.225, 'embedding_pos': 0.225},
-                    q_stride = 4, trainBool = False, entangle = True, graph = 'chain'):
+                    q_stride = 4, graph = 'chain'):
         super().__init__()
 
         self.quantum = quantum
-        self.trainBool = trainBool
         self.q_stride = q_stride
         self.mlp_hidden_size = mlp_hidden_size
 
@@ -257,7 +256,7 @@ class FeedForward(nn.Module):
         self.fc2 = nn.Linear(q_stride * mlp_hidden_size, hidden_size_out)
 
         if self.quantum:
-            self.vqc = QuantumLayer(mlp_hidden_size, entangle = entangle, trainBool = self.trainBool, graph = graph)
+            self.vqc = QuantumLayer(mlp_hidden_size, graph = graph)
         else:
             self.vqc = nn.Linear(mlp_hidden_size, mlp_hidden_size)
 
@@ -309,12 +308,11 @@ class FeedForward(nn.Module):
 
 class TransformerBlock_Attention_Chosen_QMLP(nn.Module):
     def __init__(self, hidden_size, num_heads, mlp_hidden_size, hidden_size_out, Attention_N = 2, quantum_mlp = True, dropout={'embedding_attn': 0.225, 'after_attn': 0.225, 'feedforward': 0.225, 'embedding_pos': 0.225}, 
-                    attention_selection="filter", special_cls = False ,train_q = False, entangle = True, q_stride = 4, connectivity = 'chain', RD = 1, img_size = 28, patch_size = 4):
+                    attention_selection="filter", special_cls = False , q_stride = 4, connectivity = 'chain', RD = 1, img_size = 28, patch_size = 4):
         super().__init__()
 
         self.attention_selection = attention_selection
         self.quantum_mlp = quantum_mlp
-        self.train_q = train_q
         self.dropout = dropout
         self.Attention_N = Attention_N
         self.special_cls = special_cls
@@ -333,7 +331,7 @@ class TransformerBlock_Attention_Chosen_QMLP(nn.Module):
 
         self.mlp_sel = FeedForward(hidden_size, mlp_hidden_size, hidden_size_out, quantum = self.quantum_mlp,
                                     dropout = self.dropout, trainBool = self.train_q, 
-                                    entangle = entangle, q_stride = q_stride, graph = connectivity)  # Quantum MLP
+                                    graph = connectivity)  # Quantum MLP
 
         if attention_selection != "filter" or RD > 1:
             self.mlp = nn.Linear(hidden_size, hidden_size_out) if attention_selection != "ID" else nn.Identity()
@@ -411,7 +409,7 @@ class VisionTransformer(nn.Module):
     def __init__(self, img_size, num_channels, num_classes, patch_size, hidden_size, num_heads, num_transformer_blocks, mlp_hidden_size, Attention_N = 2,
                     quantum_mlp = False, quantum_classification = False, dropout= {'embedding_attn': 0.225, 'after_attn': 0.225, 'feedforward': 0.225, 'embedding_pos': 0.225}, 
                     channels_last=False, RD = 1, attention_selection = 'filter', special_cls = False,
-                    paralel = 1, train_q = False, entangle = True, q_stride = 1, connectivity = 'chain'
+                    paralel = 1, q_stride = 1, connectivity = 'chain'
                     ):
         super().__init__()
 
@@ -434,9 +432,7 @@ class VisionTransformer(nn.Module):
         self.q_lr = (img_size * mlp_hidden_size) // patch_size  # Number of high-attention patches to select
         self.quantum_mlp = quantum_mlp
         self.quantum_classification = quantum_classification
-        self.train_q = train_q
         self.special_cls = special_cls
-        self.entangle = entangle
         self.q_stride = q_stride
         self.connectivity = connectivity
 
@@ -463,13 +459,13 @@ class VisionTransformer(nn.Module):
                                                                                         Attention_N = self.Attention_N, quantum_mlp = self.quantum_mlp,
                                                                                         dropout = self.dropout_values,
                                                                                         attention_selection = self.attention_selection, special_cls = self.special_cls,
-                                                                                        train_q = self.train_q, entangle = self.entangle, q_stride = self.q_stride, connectivity = self.connectivity)
+                                                                                        q_stride = self.q_stride, connectivity = self.connectivity)
                                             for i in range(num_transformer_blocks)]) for j in range(paralel) ] )
 
         self.layer_norm = nn.LayerNorm(hidden_size // (RD**(num_transformer_blocks)))  # Normalization after the last transformer block
 
         self.linear = nn.Linear( (hidden_size // (RD**(num_transformer_blocks)) ) * paralel, num_classes)
-        self.linear2 = nn.Linear(num_classes,num_classes) if not self.quantum_classification else QuantumLayer(num_qubits=num_classes, entangle=self.entangle, trainBool= self.train_q, graph=self.connectivity)
+        self.linear2 = nn.Linear(num_classes,num_classes) if not self.quantum_classification else QuantumLayer(num_qubits=num_classes, graph=self.connectivity)
 
     def patch_embed_sample(self, x):
         if self.channels_last:
@@ -668,14 +664,14 @@ class AutoEnformer(nn.Module):
                                                                                                     Attention_N = self.Attention_N , quantum_mlp = False,
                                                                                                     dropout = self.dropout_values,
                                                                                                     attention_selection = 'none',
-                                                                                                    train_q = False, entangle = False, q_stride = self.q_stride )
+                                                                                                    q_stride = self.q_stride )
                                                         for i in range(self.num_transformer_blocks)])  for j in range(self.paralel) ] )
                 
                 self.decoder_layers = nn.ModuleList( [nn.ModuleList ([TransformerBlock_Attention_Chosen_QMLP(self.hidden_size // self.RD**i, self.num_heads, self.mlp_hidden_size, self.hidden_size // self.RD**(i + 1) ,
                                                                                             Attention_N = self.Attention_N , quantum_mlp = False,
                                                                                             dropout = self.dropout_values,
                                                                                             attention_selection = 'none',
-                                                                                            train_q = False, entangle = False, q_stride = self.q_stride )
+                                                                                            q_stride = self.q_stride )
                                                         for i in range(self.num_transformer_blocks, 0, -1) ]) for j in range(self.paralel) ] )
                                         
                 self.Encoder = Encoder(self.encoder_layers, self.dropout)
@@ -780,8 +776,8 @@ class DeViT(nn.Module):
                     img_size=shape[-1], num_channels=shape[0], num_classes=num_classes,
                     patch_size=p['patch_size'], hidden_size= p['hidden_size'], num_heads=p['num_head'], Attention_N = p['Attention_N'],
                     num_transformer_blocks=p['num_transf'], attention_selection= p['attention_selection'], special_cls = p['special_cls'], 
-                    mlp_hidden_size=p['mlp_size'], quantum_mlp = False, dropout = p['dropout'], channels_last=False, entangle=False, quantum_classification = False,
-                    paralel = p['paralel'], RD = p['RD'], train_q = False, q_stride = p['q_stride'], connectivity = 'chain'
+                    mlp_hidden_size=p['mlp_size'], quantum_mlp = False, dropout = p['dropout'], channels_last=False, quantum_classification = False,
+                    paralel = p['paralel'], RD = p['RD'], q_stride = p['q_stride'], connectivity = 'chain'
                 )
 
                 

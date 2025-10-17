@@ -24,7 +24,7 @@ N2 = 100  # Number of epochs Classifier
 p1 = {
     'learning_rate': 0.0025, 'hidden_size': 48, 'dropout': {'embedding_attn': 0.225, 'after_attn': 0.225, 'feedforward': 0.225, 'embedding_pos': 0.225},
     'quantum' : False, 'num_head': 4, 'Attention_N' : 2, 'num_transf': 2, 'mlp_size': 12, 'patch_size': 4, 'weight_decay': 1e-7, 'attention_selection': 'filter',
-    'RD': 1, 'special_cls' : False, 'paralel': 2, 'patience': -1, 'scheduler_factor': 0.9995, 'q_stride': 1  # No early stopping
+    'RD': 1, 'entangling_method' : 'CNOT', 'special_cls' : False, 'paralel': 2, 'patience': -1, 'scheduler_factor': 0.9995, 'q_stride': 1  # No early stopping
 }
 
 p2 = {
@@ -126,7 +126,7 @@ if __name__ == "__main__":
                 if PatchBool:
                     QuLatentDatasetsTensors = []
                     padding = {'Up': 1, 'Down': 0, 'Left': 1, 'Right': 0}
-                    Quanvolution = qpctorch.quantum.quanvolution.QuantumConv2D(patch_size=2, stride=1, padding=padding, channels_out = [3], graph= 'chain')
+                    Quanvolution = qpctorch.quantum.quanvolution.QuantumConv2D(patch_size=2, stride=1, padding=padding, channels_out = [3], graph = 'chain')
 
 
                 print(f'Quantum configuration is {q_config} ')
@@ -246,7 +246,7 @@ if __name__ == "__main__":
 
 
         if SendToTelegramBool:
-            SendToTelegram(csv_file = "../QTransformer_Results_and_Datasets/selformer_results/current_results/results_grid_search.csv", columns = ['lr', 'q_config', 'test_auc'])
+            SendToTelegram(csv_file = "../QTransformer_Results_and_Datasets/selformer_results/current_results/results_grid_search.csv", columns = ['q_config', 'test_auc'])
 
     except Exception as e:
          SendToTelegram(progress = progress, error_message=str(e))
