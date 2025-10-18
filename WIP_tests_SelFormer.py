@@ -24,7 +24,7 @@ N2 = 125  # Number of epochs Classifier
 p1 = {
     'learning_rate': 0.0025, 'hidden_size': 48, 'dropout': {'embedding_attn': 0.225, 'after_attn': 0.225, 'feedforward': 0.225, 'embedding_pos': 0.225},
     'quantum' : False, 'num_head': 4, 'Attention_N' : 2, 'num_transf': 2, 'mlp_size': 12, 'patch_size': 4, 'weight_decay': 1e-7, 'attention_selection': 'filter', 
-    'selection_amount': 49, 'RD': 1, 'entangle_method' : 'SEL', 'special_cls' : False, 'paralel': 2, 'patience': -1, 'scheduler_factor': 0.9995, 'q_stride': 1,
+    'selection_amount': 25, 'RD': 1, 'entangle_method' : 'SEL', 'special_cls' : False, 'paralel': 2, 'patience': -1, 'scheduler_factor': 0.9995, 'q_stride': 1,
     'ancilla' : 1}
 
 p2 = {
@@ -33,13 +33,13 @@ p2 = {
     'RD': 1, 'special_cls' : False, 'paralel': 2, 'patience': -1, 'scheduler_factor': 0.9995, 'q_stride': 1  # No early stopping
 }
 
-Methods = ['CNOT', 'SEL', 'CRX']
+Methods = ['CRX','CNOT', 'SEL']
 
-for method in Methods:
-    p1['entangle_method'] = method
+for sel_amount in [25, 50]:
+    p1['selection_amount'] = sel_amount
 
     NameOfExperiment = 'Selformer results for different quantum configurations'
-    ExpID = 'none_vs_patch/select_all_ancilla1/' + method
+    ExpID = 'none_vs_patch/select'+ str(sel_amount)+ '_ancilla1'
 
     if __name__ == "__main__":
         try:
@@ -60,13 +60,13 @@ for method in Methods:
 
             columns = [
                 
-                'idx', 'q_config', 'test_auc_sel', 'test_acc_sel', '#params_sel' , 'test_auc', 'test_acc', 'val_auc', 'val_acc', 'train_auc',  '#params_class'
+                'idx', 'q_config', 'method', 'test_auc_sel', 'test_acc_sel', '#params_sel' , 'test_auc', 'test_acc', 'val_auc', 'val_acc', 'train_auc',  '#params_class'
             ]
 
             channels_last = False           # Set to True if last dimension of datasets tensors match channels dimension
             RepeatSelector = False       # Set to True if you want to train the autoencoder each time for more variability. For a better performance and faster training set to False.
             SendToTelegramBool = True
-            NExperiments = 20
+            NExperiments = 50
             num_classes = 7
             Trained_Selector_Once = False   
             
@@ -210,51 +210,55 @@ for method in Methods:
                             torch.save(NorLatentDatasetsTensors[0], save_path_latent / 'nlatent_train_dataset.pt')
                             torch.save(NorLatentDatasetsTensors[1], save_path_latent / 'nlatent_val_dataset.pt')
                             torch.save(NorLatentDatasetsTensors[2], save_path_latent / 'nlatent_test_dataset.pt')
-    
+
                         
 
                     # Create second model for the second step)
 
-                    for config in list(q_config):
-                        config_dataset = Latents[config]
-                        shape2 = config_dataset[-1]  # Shape of one sample in the test set
-                        print(f'Latent shape of the dataset is: {shape2}')
-                        print(f'Latent shape of the dataset is: {shape2}')
-                        print(f'Latent shape of the dataset is: {shape2}')
-                        model2 = qpctorch.quantum.vit.VisionTransformer(
-                            img_size=shape[-1], num_channels=shape[0], num_classes=num_classes,
-                            patch_size=p2['patch_size'], hidden_size= shape[0]* p2['patch_size']**2, num_heads=p2['num_head'], Attention_N = p2['Attention_N'],
-                            num_transformer_blocks=p2['num_transf'], attention_selection= p2['attention_selection'], special_cls = p2['special_cls'], 
-                            mlp_hidden_size=p2['mlp_size'], quantum_mlp = False, dropout = p2['dropout'], channels_last=False, quantum_classification = False,
-                            paralel = p2['paralel'], RD = p2['RD'], q_stride = p2['q_stride'], connectivity = 'chain'
-                        )
+                    for method in Methods:
+                        p1['entangle_method'] = method
+                        for config in list(q_config):
+                            if config == 'none' and method != 'CRX':
+                                continue  # Skip invalid combinations
+                            config_dataset = Latents[config]
+                            shape2 = config_dataset[-1]  # Shape of one sample in the test set
+                            print(f'Latent shape of the dataset is: {shape2}')
+                            print(f'Latent shape of the dataset is: {shape2}')
+                            print(f'Latent shape of the dataset is: {shape2}')
+                            model2 = qpctorch.quantum.vit.VisionTransformer(
+                                img_size=shape[-1], num_channels=shape[0], num_classes=num_classes,
+                                patch_size=p2['patch_size'], hidden_size= shape[0]* p2['patch_size']**2, num_heads=p2['num_head'], Attention_N = p2['Attention_N'],
+                                num_transformer_blocks=p2['num_transf'], attention_selection= p2['attention_selection'], special_cls = p2['special_cls'], 
+                                mlp_hidden_size=p2['mlp_size'], quantum_mlp = False, dropout = p2['dropout'], channels_last=False, quantum_classification = False,
+                                paralel = p2['paralel'], RD = p2['RD'], q_stride = p2['q_stride'], connectivity = 'chain'
+                            )
 
-                        print('\nTraining second model: classifier ViT on latent representations\n')
-                        print(f'QUANTUM SETTING IS: {config} and current lr is: {p2["learning_rate"]}')
-                        
-                        # Train second model
-                        test_auc, test_acc, val_auc, val_acc, train_auc, params = qpctorch.training.train_and_evaluate(
-                            model2, train_dl, val_dl, test_dl, num_classes=7,
-                            learning_rate=p2['learning_rate'], num_epochs=N2, device=device, mapping=False,
-                            res_folder=str(save_path), hidden_size=p2['hidden_size'], dropout=p2['dropout'],
-                            num_heads=p2['num_head'], patch_size=p2['patch_size'], num_transf=p2['num_transf'],
-                            mlp=p2['mlp_size'], wd=p2['weight_decay'], patience= p2['patience'], scheduler_factor=p2['scheduler_factor'], autoencoder=False
-                        )
-                        
-                        # Save results
-                        row = {
-                            'idx': idx, 
-                                'q_config' : config, 'test_auc_sel': test_auc_sel, 'test_acc_sel': test_acc_sel, '#params_sel': params_sel, 
-                                'test_auc': test_auc, 'test_acc': test_acc, 'val_auc': val_auc, 'val_acc': val_acc, 'train_auc': train_auc,'#params_class': params
-                        }
+                            print('\nTraining second model: classifier ViT on latent representations\n')
+                            print(f'QUANTUM SETTING IS: {config} and current lr is: {p2["learning_rate"]}')
+                            
+                            # Train second model
+                            test_auc, test_acc, val_auc, val_acc, train_auc, params = qpctorch.training.train_and_evaluate(
+                                model2, train_dl, val_dl, test_dl, num_classes=7,
+                                learning_rate=p2['learning_rate'], num_epochs=N2, device=device, mapping=False,
+                                res_folder=str(save_path), hidden_size=p2['hidden_size'], dropout=p2['dropout'],
+                                num_heads=p2['num_head'], patch_size=p2['patch_size'], num_transf=p2['num_transf'],
+                                mlp=p2['mlp_size'], wd=p2['weight_decay'], patience= p2['patience'], scheduler_factor=p2['scheduler_factor'], autoencoder=False
+                            )
+                            
+                            # Save results
+                            row = {
+                                'idx': idx, 
+                                    'q_config' : config, 'method': method if config != 'none' else 'none', 'test_auc_sel': test_auc_sel, 'test_acc_sel': test_acc_sel, '#params_sel': params_sel, 
+                                    'test_auc': test_auc, 'test_acc': test_acc, 'val_auc': val_auc, 'val_acc': val_acc, 'train_auc': train_auc,'#params_class': params
+                            }
 
-                        pd.DataFrame([row], columns=columns).to_csv(
-                            csv_path, mode='a', header=False, index=False
-                        )
+                            pd.DataFrame([row], columns=columns).to_csv(
+                                csv_path, mode='a', header=False, index=False
+                            )
 
 
             if SendToTelegramBool:
-                SendToTelegram(csv_file = csv_path, columns = ['q_config', 'test_auc'],
+                SendToTelegram(csv_file = csv_path, columns = ['method' 'test_auc'],
                             title = 'Selformer results for different configurations')
 
         except Exception as e:

@@ -23,8 +23,8 @@ N2 = 100  # Number of epochs Classifier
 # Hyperparams
 p1 = {
     'learning_rate': 5e-3, 'hidden_size': 48, 'dropout': {'embedding_attn': 0.125, 'after_attn': 0.175, 'feedforward': 0.125, 'embedding_pos': 0.125},
-    'num_head': 1, 'Attention_N' : 2, 'num_transf': 1, 'mlp_size': 18, 'patch_size': 4, 'weight_decay': 1e-7, 'attention_selection': 'none', 'entangle_method' : 'SEL',
-    'paralel' : 1 ,'connectivity': 'chain', 'RD': 1, 'patience': -1, 'scheduler_factor': 0.999, 'q_stride': 1, 'ancilla' : 1
+    'num_head': 1, 'Attention_N' : 2, 'num_transf': 1, 'mlp_size': 18, 'patch_size': 4, 'weight_decay': 1e-7, 'attention_selection': 'none', 'entangle_method' : 'CRX',
+    'paralel' : 1 ,'connectivity': 'chain', 'RD': 1, 'patience': -1, 'scheduler_factor': 0.999, 'q_stride': 1, 'ancilla' : 0
 }
 
 p2 = {
@@ -33,8 +33,8 @@ p2 = {
     'RD': 1, 'special_cls' : False, 'paralel': 1, 'patience': -1, 'scheduler_factor': 0.9995, 'q_stride': 1
 }
 
-NameOfExperiment = 'AutoEnformer results for None vs Vertical vs Quanvolution with CNOT'
-ExpID = 'none_vs_vert_vs_quanv/CNOT'
+NameOfExperiment = 'AutoEnformer results for None vs Vertical vs Quanvolution with CRX'
+ExpID = 'none_vs_vert_vs_quanv_no_ancilla/CRX'
 
 if __name__ == "__main__":
     try:
