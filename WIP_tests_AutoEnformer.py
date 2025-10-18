@@ -33,8 +33,8 @@ p2 = {
     'RD': 1, 'special_cls' : False, 'paralel': 1, 'patience': -1, 'scheduler_factor': 0.9995, 'q_stride': 1
 }
 
-NameOfExperiment = 'AutoEnformer results for None vs Vertical vs Quanvolution with SEL'
-ExpID = 'none_vs_vert_vs_quanv/SEL'
+NameOfExperiment = 'AutoEnformer results for None vs Vertical vs Quanvolution with CNOT'
+ExpID = 'none_vs_vert_vs_quanv/CNOT'
 
 if __name__ == "__main__":
     try:
