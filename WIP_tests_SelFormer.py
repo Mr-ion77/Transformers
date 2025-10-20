@@ -23,14 +23,14 @@ N2 = 125  # Number of epochs Classifier
 # Hyperparams
 p1 = {
     'learning_rate': 0.0025, 'hidden_size': 48, 'dropout': {'embedding_attn': 0.225, 'after_attn': 0.225, 'feedforward': 0.225, 'embedding_pos': 0.225},
-    'quantum' : False, 'num_head': 4, 'Attention_N' : 2, 'num_transf': 2, 'mlp_size': 12, 'patch_size': 4, 'weight_decay': 1e-7, 'attention_selection': 'filter', 
-    'selection_amount': 25, 'RD': 1, 'entangle_method' : 'SEL', 'special_cls' : False, 'paralel': 2, 'patience': -1, 'scheduler_factor': 0.9995, 'q_stride': 1,
+    'quantum' : False, 'num_head': 4, 'Attention_N' : 2, 'num_transf': 2, 'mlp_size': 8, 'patch_size': 4, 'weight_decay': 1e-7, 'attention_selection': 'filter', 
+    'selection_amount': 25, 'RD': 1, 'entangle_method' : 'SEL', 'special_cls' : False, 'paralel': 1, 'patience': -1, 'scheduler_factor': 0.985, 'q_stride': 1,
     'ancilla' : 1}
 
 p2 = {
     'learning_rate': 0.0025, 'hidden_size': 48, 'dropout': {'embedding_attn': 0.225, 'after_attn': 0.225, 'feedforward': 0.225, 'embedding_pos': 0.225},
-    'quantum' : False, 'num_head': 4, 'Attention_N' : 2, 'num_transf': 2, 'mlp_size': 12, 'patch_size': 4, 'weight_decay': 1e-7, 'attention_selection': 'filter',
-    'RD': 1, 'special_cls' : False, 'paralel': 2, 'patience': -1, 'scheduler_factor': 0.9995, 'q_stride': 1  # No early stopping
+    'quantum' : False, 'num_head': 4, 'Attention_N' : 2, 'num_transf': 1, 'mlp_size': 8, 'patch_size': 4, 'weight_decay': 1e-7, 'attention_selection': 'none',
+    'RD': 1, 'special_cls' : False, 'paralel': 2, 'patience': -1, 'scheduler_factor': 0.985, 'q_stride': 1  # No early stopping
 }
 
 columns = [
@@ -41,7 +41,7 @@ columns = [
 channels_last = False           # Set to True if last dimension of datasets tensors match channels dimension
 RepeatSelector = False       # Set to True if you want to train the autoencoder each time for more variability. For a better performance and faster training set to False.
 SendToTelegramBool = True
-NExperiments = 50
+NExperiments = 20
 num_classes = 7
 Trained_Selector_Once = False   
 

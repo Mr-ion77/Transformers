@@ -501,14 +501,15 @@ class VisionTransformer(nn.Module):
         # x.shape = (batch_size, num_steps, hidden_size)
 
         # Positional embedding
-        y = self.dropout(x + self.pos_embedding)  # [B, S, D]
+        x = self.dropout(x + self.pos_embedding)  # [B, S, D]
 
         # Attention block
-        attn_input = self.transformer_blocks[paralel_branch][0].attn_norm(y)
+        attn_input = self.transformer_blocks[paralel_branch][0].attn_norm(x)
         _, attn_map = self.transformer_blocks[paralel_branch][0].attn(attn_input)
         # Rank patches by attention
         attn_indices = rank_patches_by_attention(attn_map)
-        sel_indices = attn_indices[:, :self.q_lr]               # High-attention patches
+        # Remove CLS token from selection and select
+        sel_indices = torch.stack( [ attn_indices[i][ attn_indices[i] != 0 ][:self.q_lr] for i in range(attn_indices.size(0)) ])
         
         return x.gather(1, sel_indices.unsqueeze(-1).expand(-1, -1, x.size(-1)) ) # Shape: (batch_size, q_lr, hidden_size)
 
