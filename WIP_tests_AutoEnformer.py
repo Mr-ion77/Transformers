@@ -23,7 +23,7 @@ N2 = 100  # Number of epochs Classifier
 # Hyperparams
 p1 = {
     'learning_rate': 5e-3, 'hidden_size': 48, 'dropout': {'embedding_attn': 0.125, 'after_attn': 0.175, 'feedforward': 0.125, 'embedding_pos': 0.125},
-    'num_head': 1, 'Attention_N' : 2, 'num_transf': 1, 'mlp_size': 18, 'patch_size': 4, 'weight_decay': 1e-7, 'attention_selection': 'none', 'entangle_method' : 'CRX',
+    'num_head': 1, 'Attention_N' : 2, 'num_transf': 1, 'mlp_size': 18, 'patch_size': 4, 'weight_decay': 1e-7, 'attention_selection': 'none', 'entangle_method' : 'CNOT',
     'paralel' : 1 ,'connectivity': 'chain', 'RD': 1, 'patience': -1, 'scheduler_factor': 0.999, 'q_stride': 1, 'ancilla' : 0
 }
 
@@ -33,21 +33,22 @@ p2 = {
     'RD': 1, 'special_cls' : False, 'paralel': 1, 'patience': -1, 'scheduler_factor': 0.9995, 'q_stride': 1
 }
 
-NameOfExperiment = 'AutoEnformer results for None vs Vertical vs Quanvolution with CRX'
-ExpID = 'none_vs_vert_vs_quanv_no_ancilla/CRX'
+NameOfExperiment = 'AutoEnformer results for None vs Vertical vs Quanvolution with CNOT and no ancilla qubits'
+ExpID = 'none_vs_vert_vs_quanv_no_ancilla/CNOT'
 
 if __name__ == "__main__":
     try:
         # Save dictionary with all the hyperparameters and results in a json file
         progress = 0
+        save_path = Path(f"../QTransformer_Results_and_Datasets/autoenformer_results/{ExpID}")
         os.makedirs('../QTransformer_Results_and_Datasets/autoenformer_results/current_results', exist_ok = True)
         try:
-            os.makedirs('../QTransformer_Results_and_Datasets/autoenformer_results/'+ ExpID, exist_ok = False)
+            save_path.mkdir(parents=True, exist_ok=False)
         except FileExistsError:
-            raise ValueError(f"Directory for experiment ID '{ExpID}' already exists. Results may be overwritten. Make sure to save this results elsewhere" 
+            print(f"Directory for experiment ID '{ExpID}' already exists. Results may be overwritten. Make sure to save this results elsewhere " 
                     "or modify 'ExpID' to a new value if you want to keep previous results.")
 
-        with open('../QTransformer_Results_and_Datasets/autoenformer_results/'+ ExpID +'/hyperparameters.json', 'w') as f:
+        with open(os.path.join(save_path, 'hyperparameters.json'), 'w') as f:
             f.write('\nHyperparameters for Autoencoder\n')
             json.dump(p1, f, indent=4)
             f.write('\nHyperparameters for Classifier\n')  # Separator text between dictionaries
@@ -65,10 +66,11 @@ if __name__ == "__main__":
 
 
         
-        csv_path = '../QTransformer_Results_and_Datasets/autoenformer_results/'+ ExpID +'/results_grid_search.csv'
+        csv_path = os.path.join(save_path, 'results_grid_search.csv')
         if not os.path.exists(csv_path):
             df = pd.DataFrame(columns=columns)
             df.to_csv(csv_path, mode='a', header=True, index=False)
+
 
         q_config = {'none', 'quanvolution', 'vertical'}  # Options: 'none', 'patchwise', 'quanvolution', 'vertical'
         progress_levels = [0, 25, 50, 75, 100]
@@ -77,15 +79,17 @@ if __name__ == "__main__":
                 SendToTelegram(progress = 0)   
 
         for idx in range(NExperiments):
+
+            aux_save_path = Path(f"../QTransformer_Results_and_Datasets/autoenformer_results/current_results/grid_search{idx}")
+            aux_save_path.mkdir(parents=True, exist_ok=True)
+            os.makedirs(aux_save_path / 'autoencoder', exist_ok=True)
+
             progress = int( 100* (idx+1)//NExperiments )
             if SendToTelegramBool and progress in progress_levels:
                 SendToTelegram(progress = progress)                
 
             for lr in [5e-4, 1e-3, 2.5e-3, 5e-3]:
                 print(f"\n\nPoint {idx}")
-                save_path = Path(f"../QTransformer_Results_and_Datasets/autoenformer_results/current_results/grid_search{idx}")
-                save_path.mkdir(parents=True, exist_ok=True)
-                os.makedirs(save_path / 'autoencoder', exist_ok=True)
 
                 # Determine if quantum processing is enabled based on q_config
                 # q_config can be a string or a list/tuple; handle both
@@ -121,7 +125,7 @@ if __name__ == "__main__":
                     test_mse, val_mse, params1 = qpctorch.training.train_and_evaluate(
                         model1, train_dl, val_dl, test_dl, num_classes=7,
                         learning_rate=p1['learning_rate'], num_epochs=N1, device=device, mapping=False,
-                        res_folder=str(save_path) + '/autoencoder', hidden_size=p1['hidden_size'], dropout=p1['dropout'],
+                        res_folder=str(aux_save_path) + '/autoencoder', hidden_size=p1['hidden_size'], dropout=p1['dropout'],
                         num_heads=p1['num_head'], patch_size=p1['patch_size'], num_transf=p1['num_transf'],
                         mlp=p1['mlp_size'], wd=p1['weight_decay'], patience= p1['patience'], scheduler_factor= p1['scheduler_factor'], autoencoder=True,
                         save_reconstructed_images = True if idx == 0 else False
@@ -264,7 +268,7 @@ if __name__ == "__main__":
                     test_auc, test_acc, val_auc, val_acc, train_auc, params2 = qpctorch.training.train_and_evaluate(
                         model2, config_dataset[0], config_dataset[1], config_dataset[2], num_classes=7,
                         learning_rate=p2['learning_rate'], num_epochs=N2, device=device, mapping=False,
-                        res_folder=str(save_path), hidden_size=p2['hidden_size'], dropout=p2['dropout'],
+                        res_folder=str(aux_save_path), hidden_size=p2['hidden_size'], dropout=p2['dropout'],
                         num_heads=p2['num_head'], patch_size=p2['patch_size'], num_transf=p2['num_transf'],
                         mlp=p2['mlp_size'], wd=p2['weight_decay'], patience= p2['patience'], scheduler_factor=p2['scheduler_factor'], autoencoder=False
                     )

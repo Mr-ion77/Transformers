@@ -410,7 +410,7 @@ class VisionTransformer(nn.Module):
     def __init__(self, img_size, num_channels, num_classes, patch_size, hidden_size, num_heads, num_transformer_blocks, mlp_hidden_size, Attention_N = 2,
                     quantum_mlp = False, quantum_classification = False, dropout= {'embedding_attn': 0.225, 'after_attn': 0.225, 'feedforward': 0.225, 'embedding_pos': 0.225}, 
                     channels_last=False, RD = 1, attention_selection = 'filter', selection_amount = None, special_cls = False,
-                    paralel = 1, q_stride = 1, connectivity = 'chain'
+                    paralel = 1, q_stride = 1, connectivity = 'chain', patch_embedding_required = True
                     ):
         super().__init__()
 
@@ -437,6 +437,7 @@ class VisionTransformer(nn.Module):
         self.special_cls = special_cls
         self.q_stride = q_stride
         self.connectivity = connectivity
+        self.patch_embedding_required = patch_embedding_required
 
         # Splitting an image into patches and linearly projecting these flattened patches can be
         # simplified as a single convolution operation, where both the kernel size and the stride size
@@ -512,18 +513,22 @@ class VisionTransformer(nn.Module):
         return x.gather(1, sel_indices.unsqueeze(-1).expand(-1, -1, x.size(-1)) ) # Shape: (batch_size, q_lr, hidden_size)
 
 
-    def forward(self, x, patch_embedding_required = True):
+    def forward(self, x):
 
-        if patch_embedding_required:
+        if self.patch_embedding_required:
             x = self.patch_embed_sample(x)
-        # x.shape = (batch_size, num_patches, hidden_size)
+            # Positional embedding
 
-        # CLS token
+            # CLS token
+            x = torch.cat((self.cls_token.expand(x.shape[0], -1, -1), x), dim=1)
+            # x.shape = (batch_size, num_steps, hidden_size)
+
+            x = self.dropout(x + self.pos_embedding)  # [B, S, D]
+            # x.shape = (batch_size, num_patches, hidden_size)
+
+        # CLS token (Even if we haven't applied patch embedding here, we assume the input x doesn't have the cls token included yet)
         x = torch.cat((self.cls_token.expand(x.shape[0], -1, -1), x), dim=1)
         # x.shape = (batch_size, num_steps, hidden_size)
-
-        # Positional embedding
-        x = self.dropout(x + self.pos_embedding)  # [B, S, D]
 
         # Repeat x for each parallel branch
         x_parallel = x.unsqueeze(0).repeat(self.paralel, 1, 1, 1)  # [P, B, S, D]
@@ -779,7 +784,7 @@ class DeViT(nn.Module):
                     patch_size=p['patch_size'], hidden_size= p['hidden_size'], num_heads=p['num_head'], Attention_N = p['Attention_N'],
                     num_transformer_blocks=p['num_transf'], attention_selection= p['attention_selection'], special_cls = p['special_cls'], 
                     mlp_hidden_size=p['mlp_size'], quantum_mlp = False, dropout = p['dropout'], channels_last=False, quantum_classification = False,
-                    paralel = p['paralel'], RD = p['RD'], q_stride = p['q_stride'], connectivity = 'chain'
+                    paralel = p['paralel'], RD = p['RD'], q_stride = p['q_stride'], connectivity = 'chain', patch_embedding_required= False
                 )
 
                 
@@ -788,5 +793,5 @@ class DeViT(nn.Module):
                 assert x.shape[-1] == self.dim_latent, f"Input feature dimension ({x.shape[-1]}) does not match expected size ({self.dim_latent})"
                 x = self.dimension_adjustment(x)  
             
-                return self.vit(x, patch_embedding_required = False)  # Skip patch embedding in ViT
+                return self.vit(x)  # Skip patch embedding in ViT
 

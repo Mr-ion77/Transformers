@@ -33,9 +33,21 @@ p2 = {
     'RD': 1, 'special_cls' : False, 'paralel': 2, 'patience': -1, 'scheduler_factor': 0.9995, 'q_stride': 1  # No early stopping
 }
 
+columns = [
+    
+    'idx', 'q_config', 'method', 'test_auc_sel', 'test_acc_sel', '#params_sel' , 'test_auc', 'test_acc', 'val_auc', 'val_acc', 'train_auc',  '#params_class'
+]
+
+channels_last = False           # Set to True if last dimension of datasets tensors match channels dimension
+RepeatSelector = False       # Set to True if you want to train the autoencoder each time for more variability. For a better performance and faster training set to False.
+SendToTelegramBool = True
+NExperiments = 50
+num_classes = 7
+Trained_Selector_Once = False   
+
 Methods = ['CRX','CNOT', 'SEL']
 
-for sel_amount in [25, 50]:
+for sel_amount in [25, 20, 15, 10]:
     p1['selection_amount'] = sel_amount
 
     NameOfExperiment = 'Selformer results for different quantum configurations'
@@ -58,18 +70,6 @@ for sel_amount in [25, 50]:
                 f.write('\nHyperparameters for Classifier\n')  # Separator text between dictionaries
                 json.dump(p2, f, indent=4)
 
-            columns = [
-                
-                'idx', 'q_config', 'method', 'test_auc_sel', 'test_acc_sel', '#params_sel' , 'test_auc', 'test_acc', 'val_auc', 'val_acc', 'train_auc',  '#params_class'
-            ]
-
-            channels_last = False           # Set to True if last dimension of datasets tensors match channels dimension
-            RepeatSelector = False       # Set to True if you want to train the autoencoder each time for more variability. For a better performance and faster training set to False.
-            SendToTelegramBool = True
-            NExperiments = 50
-            num_classes = 7
-            Trained_Selector_Once = False   
-            
             csv_path = '../QTransformer_Results_and_Datasets/selformer_results/' + ExpID + '/results_grid_search.csv'
             if not os.path.exists(csv_path):
                 df = pd.DataFrame(columns=columns)
@@ -120,10 +120,10 @@ for sel_amount in [25, 50]:
                         paralel = p1['paralel'], RD = p1['RD'], q_stride = p1['q_stride'], connectivity = 'chain'
                     )
 
-                    # Train second model
+                    # Train first model
                     test_auc_sel, test_acc_sel, val_auc_sel, val_acc_sel, train_auc_sel, params_sel = qpctorch.training.train_and_evaluate(
                         model1, train_dl, val_dl, test_dl, num_classes=7,
-                        learning_rate=p1['learning_rate'], num_epochs=N2, device=device, mapping=False,
+                        learning_rate=p1['learning_rate'], num_epochs=N1, device=device, mapping=False,
                         res_folder=str(save_path), hidden_size=p1['hidden_size'], dropout=p1['dropout'],
                         num_heads=p1['num_head'], patch_size=p1['patch_size'], num_transf=p1['num_transf'],
                         mlp=p1['mlp_size'], wd=p1['weight_decay'], patience= p1['patience'], scheduler_factor=p1['scheduler_factor'], autoencoder=False
@@ -171,7 +171,7 @@ for sel_amount in [25, 50]:
                                     # Reshape patches to fit quanvolution input
                                     aux_patches = selected_patches.view(-1, num_channels, p1['patch_size'], p1['patch_size'])  # (B * num_patches, C, patch_size, patch_size)
                                     aux_patch_outs = Quanvolution(aux_patches)  # (B * num_patches, C, H_out, W_out)
-                                    latent_patch_aux = aux_patch_outs.view(selected_patches.size(0), -1, aux_patch_outs.size(1))  # (B, num_patches, new_patch_dim)
+                                    latent_patch_aux = aux_patch_outs.view((*selected_patches.shape[:-1], -1))  # (B, num_patches, new_patch_dim)
                                     all_latents_quantum.extend( latent_patch_aux.cpu() )
 
                                 all_labels.extend( labels )
@@ -222,15 +222,15 @@ for sel_amount in [25, 50]:
                                 continue  # Skip invalid combinations
                             config_dataset = Latents[config]
                             shape2 = config_dataset[-1]  # Shape of one sample in the test set
-                            print(f'Latent shape of the dataset is: {shape2}')
-                            print(f'Latent shape of the dataset is: {shape2}')
-                            print(f'Latent shape of the dataset is: {shape2}')
+                            print(f'Latent shape of the dataset is: {shape2} and method is {method}')
+                            print(f'Latent shape of the dataset is: {shape2} and method is {method}')
+                            print(f'Latent shape of the dataset is: {shape2} and method is {method}')
                             model2 = qpctorch.quantum.vit.VisionTransformer(
                                 img_size=shape[-1], num_channels=shape[0], num_classes=num_classes,
                                 patch_size=p2['patch_size'], hidden_size= shape[0]* p2['patch_size']**2, num_heads=p2['num_head'], Attention_N = p2['Attention_N'],
                                 num_transformer_blocks=p2['num_transf'], attention_selection= p2['attention_selection'], special_cls = p2['special_cls'], 
                                 mlp_hidden_size=p2['mlp_size'], quantum_mlp = False, dropout = p2['dropout'], channels_last=False, quantum_classification = False,
-                                paralel = p2['paralel'], RD = p2['RD'], q_stride = p2['q_stride'], connectivity = 'chain'
+                                paralel = p2['paralel'], RD = p2['RD'], q_stride = p2['q_stride'], connectivity = 'chain', patch_embedding_required = False
                             )
 
                             print('\nTraining second model: classifier ViT on latent representations\n')
@@ -238,7 +238,7 @@ for sel_amount in [25, 50]:
                             
                             # Train second model
                             test_auc, test_acc, val_auc, val_acc, train_auc, params = qpctorch.training.train_and_evaluate(
-                                model2, train_dl, val_dl, test_dl, num_classes=7,
+                                model2, config_dataset[0], config_dataset[1], config_dataset[2], num_classes=7,
                                 learning_rate=p2['learning_rate'], num_epochs=N2, device=device, mapping=False,
                                 res_folder=str(save_path), hidden_size=p2['hidden_size'], dropout=p2['dropout'],
                                 num_heads=p2['num_head'], patch_size=p2['patch_size'], num_transf=p2['num_transf'],
@@ -258,8 +258,8 @@ for sel_amount in [25, 50]:
 
 
             if SendToTelegramBool:
-                SendToTelegram(csv_file = csv_path, columns = ['method' 'test_auc'],
-                            title = 'Selformer results for different configurations')
+                SendToTelegram(csv_file = csv_path, columns = ['method', 'test_auc'],
+                            title = f'Selformer results for different q_ configurations and selected_amount ={sel_amount}' )
 
         except Exception as e:
             SendToTelegram(progress = progress, error_message=str(e))
