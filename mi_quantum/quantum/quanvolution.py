@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from mi_quantum.quantum.pennylane_backend import QuantumLayer
 
 
-def median_pad_2d(x, padding):
+def custom_pad_2d(x, padding, pad_filler='median'):
     """
     Pad a 4-D tensor x=(B, C, H, W) with the spatial median per (B,C) channel.
     padding: int number of pixels to pad on all sides.
@@ -21,15 +21,19 @@ def median_pad_2d(x, padding):
         raise ValueError("Padding must be an integer or a dict of 4 integers {'Up': int, 'Down': int, 'Left': int, Right': int}.")
 
     B, C, H, W = x.shape
-    flat = x.reshape(B, C, -1)
-    med = flat.median(dim=-1).values  # (B, C)
+    if pad_filler == 'zero':
+        padded_x = F.pad(x, (padding['Left'], padding['Right'], padding['Up'], padding['Down']), mode='constant', value=0)
+        return padded_x
+    elif pad_filler == 'median':
+        flat = x.reshape(B, C, -1)
+        med = flat.median(dim=-1).values  # (B, C)
 
-    Hn = H + padding['Up'] + padding['Down']
-    Wn = W + padding['Left'] + padding['Right']
-    med_exp = med.view(B, C, 1, 1).expand(B, C, Hn, Wn).contiguous()
-    med_exp[:, :, padding['Down']:(H+padding['Down']), padding['Left']:(W+padding['Left']) ] = x
-    
-    return med_exp
+        Hn = H + padding['Up'] + padding['Down']
+        Wn = W + padding['Left'] + padding['Right']
+        med_exp = med.view(B, C, 1, 1).expand(B, C, Hn, Wn).contiguous()
+        med_exp[:, :, padding['Down']:(H+padding['Down']), padding['Left']:(W+padding['Left']) ] = x
+        
+        return med_exp
 
 
 class QuantumKernel(nn.Module):
@@ -53,7 +57,7 @@ class QuantumKernel(nn.Module):
     
 
 class QuantumConv2D(nn.Module):
-    def __init__(self, patch_size=3, stride=1, padding=0, channels_out = [4], channels_last = False, graph= 'chain', entangle_method ='CNOT', ancilla = 1):
+    def __init__(self, patch_size=3, stride=1, padding=0, channels_out = [4], channels_last = False, graph= 'chain', entangle_method ='CNOT', ancilla = 1, pad_filler = 'median'):
         super().__init__()
 
         if ancilla and channels_out != [-1]:
@@ -61,13 +65,14 @@ class QuantumConv2D(nn.Module):
 
         self.channels_out = channels_out if not ancilla else [-1]
         self.kernel = QuantumKernel(
-            circuit = QuantumLayer(num_qubits = patch_size**2 + ancilla, graph = graph),
+            circuit = QuantumLayer(num_qubits = patch_size**2 + ancilla, graph = graph, entangle_method=entangle_method),
             channels_out = channels_out, ancilla = ancilla
         )
 
         self.patch_size = patch_size
         self.stride = stride
         self.padding = padding
+        self.pad_filler = pad_filler
         if isinstance(padding, int):
             self.padding = {'Up': padding, 'Down': padding, 'Left': padding, 'Right': padding}
         elif not isinstance(padding, dict):
@@ -96,7 +101,7 @@ class QuantumConv2D(nn.Module):
 
             y = x[:, channel, :, :].unsqueeze(1)  # shape (B, 1, H, W)
             # Apply median padding manually so unfold uses padded tensor
-            y = median_pad_2d(y, self.padding)
+            y = custom_pad_2d(y, self.padding, self.pad_filler)
 
             patches = self.unfold(y)  # (B, patch_size^2, L), L is number of patches
             patches = patches.transpose(1, 2)  # (B, L, patch_size^2)
@@ -121,7 +126,7 @@ class QuantumConv2D(nn.Module):
         return torch.cat(outputs_by_channel, dim=1) if C > 1 else output[:,0,:,:] # (B, C×D, H_out, W_out)
     
 class QuantumConv1D(nn.Module):
-    def __init__(self, window_size=3, stride=1, padding=0, channels_out = [4], graph= 'chain', entangle_method = 'CNOT', ancilla = 1):
+    def __init__(self, window_size=3, stride=1, padding=0, channels_out = [4], graph= 'chain', entangle_method = 'CNOT', ancilla = 1, pad_filler = 'median'):
         super().__init__()
 
         if ancilla and channels_out != [-1]:
@@ -129,6 +134,7 @@ class QuantumConv1D(nn.Module):
 
         self.channels_out = channels_out if not ancilla else [-1]
         self.entangle_method = entangle_method
+        self.pad_filler = pad_filler
         self.kernel = QuantumKernel(
             circuit = QuantumLayer(num_qubits = window_size + ancilla, graph = graph, entangle_method=entangle_method),
             channels_out = channels_out, ancilla = ancilla
@@ -182,7 +188,7 @@ class QuantumConv1D(nn.Module):
                 W = x.shape[3]
 
             # Apply median padding manually along the length dimension (and width if applicable)
-            y = median_pad_2d(y, self.padding)
+            y = custom_pad_2d(y, self.padding, self.pad_filler)
 
             # Extract patches: (B, window_size * 1, L_out * W)
             patches = self.unfold(y)  # (B, window_size, L_out * W)

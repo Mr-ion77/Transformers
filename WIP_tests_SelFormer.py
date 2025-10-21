@@ -24,8 +24,8 @@ N2 = 125  # Number of epochs Classifier
 p1 = {
     'learning_rate': 0.0025, 'hidden_size': 48, 'dropout': {'embedding_attn': 0.225, 'after_attn': 0.225, 'feedforward': 0.225, 'embedding_pos': 0.225},
     'quantum' : False, 'num_head': 4, 'Attention_N' : 2, 'num_transf': 2, 'mlp_size': 8, 'patch_size': 4, 'weight_decay': 1e-7, 'attention_selection': 'filter', 
-    'selection_amount': 25, 'RD': 1, 'entangle_method' : 'SEL', 'special_cls' : False, 'paralel': 1, 'patience': -1, 'scheduler_factor': 0.985, 'q_stride': 1,
-    'ancilla' : 1}
+    'selection_amount': 25, 'RD': 1, 'connectivity' : 'star' ,'entangle_method' : 'SEL', 'special_cls' : False, 'paralel': 1, 'patience': -1, 'scheduler_factor': 0.985, 'q_stride': 1,
+    'ancilla' : 0}
 
 p2 = {
     'learning_rate': 0.0025, 'hidden_size': 48, 'dropout': {'embedding_attn': 0.225, 'after_attn': 0.225, 'feedforward': 0.225, 'embedding_pos': 0.225},
@@ -35,7 +35,7 @@ p2 = {
 
 columns = [
     
-    'idx', 'q_config', 'method', 'test_auc_sel', 'test_acc_sel', '#params_sel' , 'test_auc', 'test_acc', 'val_auc', 'val_acc', 'train_auc',  '#params_class'
+    'idx', 'q_config', 'method', 'connect', 'test_auc_sel', 'test_acc_sel', '#params_sel' , 'test_auc', 'test_acc', 'val_auc', 'val_acc', 'train_auc',  '#params_class'
 ]
 
 channels_last = False           # Set to True if last dimension of datasets tensors match channels dimension
@@ -47,11 +47,11 @@ Trained_Selector_Once = False
 
 Methods = ['CRX','CNOT', 'SEL']
 
-for sel_amount in [25, 20, 15, 10]:
-    p1['selection_amount'] = sel_amount
+for connect in ['star', 'X']:
+    p1['connectivity'] = connect
 
     NameOfExperiment = 'Selformer results for different quantum configurations'
-    ExpID = 'none_vs_patch/select'+ str(sel_amount)+ '_ancilla1'
+    ExpID = 'none_vs_patch/select'+ '25'+ '_no_anc_'+str(connect)+'_connectivity'
 
     if __name__ == "__main__":
         try:
@@ -138,8 +138,9 @@ for sel_amount in [25, 20, 15, 10]:
                     if PatchBool:
                         QuLatentDatasetsTensors = []
                         padding = {'Up': 1, 'Down': 0, 'Left': 1, 'Right': 0}
+                        print(f'Quantum Conv2D settings: Patch size: 2, Stride:1, \nPadding: {padding}, Connectivity: {p1["connectivity"]}, \nEntangle method: {p1["entangle_method"]}, Ancilla: {p1["ancilla"]}' )
                         Quanvolution = qpctorch.quantum.quanvolution.QuantumConv2D(
-                            patch_size=2, stride=1, padding=padding, channels_out = [-1], graph = 'chain', entangle_method = p1['entangle_method'], ancilla = p1['ancilla']
+                            patch_size=2, stride=1, padding=padding, channels_out = [-1], graph = p1["connectivity"], entangle_method = p1['entangle_method'], ancilla = p1['ancilla'], pad_filler = 'median'
                             ).to(device)
 
 
@@ -248,7 +249,8 @@ for sel_amount in [25, 20, 15, 10]:
                             # Save results
                             row = {
                                 'idx': idx, 
-                                    'q_config' : config, 'method': method if config != 'none' else 'none', 'test_auc_sel': test_auc_sel, 'test_acc_sel': test_acc_sel, '#params_sel': params_sel, 
+                                    'q_config' : config, 'method': method if config != 'none' else 'none', 'connect': p1['connectivity'],
+                                    'test_auc_sel': test_auc_sel, 'test_acc_sel': test_acc_sel, '#params_sel': params_sel, 
                                     'test_auc': test_auc, 'test_acc': test_acc, 'val_auc': val_auc, 'val_acc': val_acc, 'train_auc': train_auc,'#params_class': params
                             }
 
@@ -259,7 +261,7 @@ for sel_amount in [25, 20, 15, 10]:
 
             if SendToTelegramBool:
                 SendToTelegram(csv_file = csv_path, columns = ['method', 'test_auc'],
-                            title = f'Selformer results for different q_ configurations and selected_amount ={sel_amount}' )
+                            title = f'Selformer results for different q_ configurations and connectivity ={p1["connectivity"]}' )
 
         except Exception as e:
             SendToTelegram(progress = progress, error_message=str(e))

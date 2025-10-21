@@ -16,7 +16,7 @@ from TelegramBot import SendToTelegram
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
 
-B = 256
+B = 64
 N1 = 150  # Number of epochs Autoencoder
 N2 = 100  # Number of epochs Classifier
 
@@ -24,7 +24,7 @@ N2 = 100  # Number of epochs Classifier
 p1 = {
     'learning_rate': 5e-3, 'hidden_size': 48, 'dropout': {'embedding_attn': 0.125, 'after_attn': 0.175, 'feedforward': 0.125, 'embedding_pos': 0.125},
     'num_head': 1, 'Attention_N' : 2, 'num_transf': 1, 'mlp_size': 18, 'patch_size': 4, 'weight_decay': 1e-7, 'attention_selection': 'none', 'entangle_method' : 'CNOT',
-    'paralel' : 1 ,'connectivity': 'chain', 'RD': 1, 'patience': -1, 'scheduler_factor': 0.999, 'q_stride': 1, 'ancilla' : 0
+    'paralel' : 1 ,'connectivity': 'king', 'RD': 1, 'patience': -1, 'scheduler_factor': 0.999, 'q_stride': 1, 'ancilla' : 0
 }
 
 p2 = {
@@ -34,7 +34,7 @@ p2 = {
 }
 
 NameOfExperiment = 'AutoEnformer results for None vs Vertical vs Quanvolution with CNOT and no ancilla qubits'
-ExpID = 'none_vs_vert_vs_quanv_no_ancilla/CNOT'
+ExpID = 'none_vs_vert_vs_quanv_no_ancilla/CNOT/king'
 
 if __name__ == "__main__":
     try:
@@ -103,7 +103,7 @@ if __name__ == "__main__":
 
                     # Load data
                     train_dl, val_dl, test_dl, shape = qpctorch.data.get_medmnist_dataloaders(
-                        pixel=28, data_flag='dermamnist', batch_size=B, num_workers=4, pin_memory=True
+                        pixel=28, data_flag='dermamnist', batch_size=B, num_workers=1, pin_memory=True
                     )
 
                     # Obtain general settings regarding dataset shape
@@ -142,13 +142,13 @@ if __name__ == "__main__":
                         QuantumLayer = qpctorch.quantum.pennylane_backend.QuantumLayer(num_qubits = 9, graph = p1['connectivity'], entangle_method = p1['entangle_method'])
                     if QuanvBool:
                         MoLatentDatasetsTensors = []
-                        Quanvolution = QuantumConv2D(patch_size=3, stride=1, padding=1, channels_out = [4], graph= p1['connectivity'], entangle_method= p1['entangle_method'], ancilla = p1['ancilla'])
+                        Quanvolution = QuantumConv2D(patch_size=3, stride=1, padding=1, channels_out = [4], graph= p1['connectivity'], entangle_method= p1['entangle_method'], ancilla = p1['ancilla'], pad_filler = 'zero')
                     if VerticalBool:
                         VoLatentDatasetsTensors = []
                         padding = {'Up': 1, 'Down': 1} 
-                        VerticalQuanvolution = QuantumConv1D(window_size=3, stride=1, padding=padding, channels_out = [1], graph= p1['connectivity'], entangle_method= p1['entangle_method'], ancilla = p1['ancilla'])
+                        VerticalQuanvolution = QuantumConv1D(window_size=3, stride=1, padding=padding, channels_out = [1], graph= p1['connectivity'], entangle_method= p1['entangle_method'], ancilla = p1['ancilla'], pad_filler = 'zero')
 
-                    print(f'Quantum configuration is {q_config} ')
+                    print(f'Quantum configuration is {q_config}')
                     
                     for i, dl in enumerate(DataLoaders):
                         if NoneBool:
