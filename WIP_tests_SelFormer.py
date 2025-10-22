@@ -23,14 +23,14 @@ N2 = 125  # Number of epochs Classifier
 # Hyperparams
 p1 = {
     'learning_rate': 0.0025, 'hidden_size': 48, 'dropout': {'embedding_attn': 0.225, 'after_attn': 0.225, 'feedforward': 0.225, 'embedding_pos': 0.225},
-    'quantum' : False, 'num_head': 4, 'Attention_N' : 2, 'num_transf': 2, 'mlp_size': 8, 'patch_size': 4, 'weight_decay': 1e-7, 'attention_selection': 'filter', 
+    'quantum' : False, 'num_head': 4, 'Attention_N' : 2, 'num_transf': 1, 'mlp_size': 8, 'patch_size': 4, 'weight_decay': 1e-7, 'attention_selection': 'filter', 
     'selection_amount': 25, 'RD': 1, 'connectivity' : 'star' ,'entangle_method' : 'SEL', 'special_cls' : False, 'paralel': 1, 'patience': -1, 'scheduler_factor': 0.985, 'q_stride': 1,
     'ancilla' : 0}
 
 p2 = {
-    'learning_rate': 0.0025, 'hidden_size': 48, 'dropout': {'embedding_attn': 0.225, 'after_attn': 0.225, 'feedforward': 0.225, 'embedding_pos': 0.225},
+    'learning_rate': 0.0025, 'hidden_size': 48, 'dropout': {'embedding_attn': 0.3, 'after_attn': 0.335, 'feedforward': 0.335, 'embedding_pos': 0.335},
     'quantum' : False, 'num_head': 4, 'Attention_N' : 2, 'num_transf': 1, 'mlp_size': 8, 'patch_size': 4, 'weight_decay': 1e-7, 'attention_selection': 'none',
-    'RD': 1, 'special_cls' : False, 'paralel': 2, 'patience': -1, 'scheduler_factor': 0.985, 'q_stride': 1  # No early stopping
+    'RD': 1, 'special_cls' : False, 'paralel': 2, 'patience': -1, 'scheduler_factor': 0.975, 'q_stride': 1  # No early stopping
 }
 
 columns = [
@@ -51,7 +51,7 @@ for connect in ['star', 'X']:
     p1['connectivity'] = connect
 
     NameOfExperiment = 'Selformer results for different quantum configurations'
-    ExpID = 'none_vs_patch/select'+ '25'+ '_no_anc_'+str(connect)+'_connectivity'
+    ExpID = 'none_vs_patch/no_ancilla/select'+ '25'+ '_no_anc_'+str(connect)+'_connectivity_*pi_in_qcircuits_high_dropout'
 
     if __name__ == "__main__":
         try:

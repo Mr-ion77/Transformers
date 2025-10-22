@@ -28,13 +28,13 @@ p1 = {
 }
 
 p2 = {
-    'learning_rate': 0.0025, 'hidden_size': 18, 'dropout': {'embedding_attn': 0.15, 'after_attn': 0.175, 'feedforward': 0.15, 'embedding_pos': 0.15},
-    'quantum' : False, 'num_head': 1, 'Attention_N' : 2, 'num_transf': 4, 'mlp_size': 18, 'patch_size': 4, 'weight_decay': 1e-7, 'attention_selection': 'none',
-    'RD': 1, 'special_cls' : False, 'paralel': 1, 'patience': -1, 'scheduler_factor': 0.9995, 'q_stride': 1
+    'learning_rate': 0.0025, 'hidden_size': 18, 'dropout': {'embedding_attn': 0.275, 'after_attn': 0.225, 'feedforward': 0.225, 'embedding_pos': 0.225},
+    'quantum' : False, 'num_head': 1, 'Attention_N' : 2, 'num_transf': 2, 'mlp_size': 18, 'patch_size': 4, 'weight_decay': 1e-7, 'attention_selection': 'none',
+    'RD': 1, 'special_cls' : False, 'paralel': 2, 'patience': -1, 'scheduler_factor': 0.9995, 'q_stride': 1
 }
 
 NameOfExperiment = 'AutoEnformer results for None vs Vertical vs Quanvolution with CNOT and no ancilla qubits'
-ExpID = 'none_vs_vert_vs_quanv_no_ancilla/CNOT/king'
+ExpID = 'none_vs_vert_vs_quanv_no_ancilla/CNOT/king/2x2_high_dropout'
 
 if __name__ == "__main__":
     try:
@@ -88,7 +88,7 @@ if __name__ == "__main__":
             if SendToTelegramBool and progress in progress_levels:
                 SendToTelegram(progress = progress)                
 
-            for lr in [5e-4, 1e-3, 2.5e-3, 5e-3]:
+            for lr in [5e-3, 7.5e-3, 1e-2]:
                 print(f"\n\nPoint {idx}")
 
                 # Determine if quantum processing is enabled based on q_config
@@ -145,8 +145,8 @@ if __name__ == "__main__":
                         Quanvolution = QuantumConv2D(patch_size=3, stride=1, padding=1, channels_out = [4], graph= p1['connectivity'], entangle_method= p1['entangle_method'], ancilla = p1['ancilla'], pad_filler = 'zero')
                     if VerticalBool:
                         VoLatentDatasetsTensors = []
-                        padding = {'Up': 1, 'Down': 1} 
-                        VerticalQuanvolution = QuantumConv1D(window_size=3, stride=1, padding=padding, channels_out = [1], graph= p1['connectivity'], entangle_method= p1['entangle_method'], ancilla = p1['ancilla'], pad_filler = 'zero')
+                        padding = {'Up': 4, 'Down': 4} 
+                        VerticalQuanvolution = QuantumConv1D(window_size=9, stride=1, padding=padding, channels_out = [4], graph= p1['connectivity'], entangle_method= p1['entangle_method'], ancilla = p1['ancilla'], pad_filler = 'zero')
 
                     print(f'Quantum configuration is {q_config}')
                     
