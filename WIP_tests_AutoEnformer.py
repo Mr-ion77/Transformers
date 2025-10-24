@@ -18,23 +18,23 @@ print(f"Using device: {device}")
 
 B = 64
 N1 = 150  # Number of epochs Autoencoder
-N2 = 100  # Number of epochs Classifier
+N2 = 125  # Number of epochs Classifier
 
 # Hyperparams
 p1 = {
     'learning_rate': 5e-3, 'hidden_size': 48, 'dropout': {'embedding_attn': 0.125, 'after_attn': 0.175, 'feedforward': 0.125, 'embedding_pos': 0.125},
-    'num_head': 1, 'Attention_N' : 2, 'num_transf': 1, 'mlp_size': 18, 'patch_size': 4, 'weight_decay': 1e-7, 'attention_selection': 'none', 'entangle_method' : 'CNOT',
+    'num_head': 1, 'Attention_N' : 2, 'num_transf': 1, 'mlp_size': 18, 'patch_size': 4, 'weight_decay': 1e-7, 'attention_selection': 'none', 'entangle_method' : 'CRX',
     'paralel' : 1 ,'connectivity': 'king', 'RD': 1, 'patience': -1, 'scheduler_factor': 0.999, 'q_stride': 1, 'ancilla' : 0
 }
 
 p2 = {
-    'learning_rate': 0.0025, 'hidden_size': 18, 'dropout': {'embedding_attn': 0.275, 'after_attn': 0.225, 'feedforward': 0.225, 'embedding_pos': 0.225},
-    'quantum' : False, 'num_head': 1, 'Attention_N' : 2, 'num_transf': 2, 'mlp_size': 18, 'patch_size': 4, 'weight_decay': 1e-7, 'attention_selection': 'none',
+    'learning_rate': 0.0025, 'hidden_size': 18, 'dropout': {'embedding_attn': 0.275, 'after_attn': 0.275, 'feedforward': 0.275, 'embedding_pos': 0.275},
+    'quantum' : False, 'num_head': 1, 'Attention_N' : 2, 'num_transf': 2, 'mlp_size': 18, 'patch_size': 4, 'weight_decay': 1e-7, 'attention_selection': 'filter',
     'RD': 1, 'special_cls' : False, 'paralel': 2, 'patience': -1, 'scheduler_factor': 0.9995, 'q_stride': 1
 }
 
-NameOfExperiment = 'AutoEnformer results for None vs Vertical vs Quanvolution with CNOT and no ancilla qubits'
-ExpID = 'none_vs_vert_vs_quanv_no_ancilla/CNOT/king/2x2_high_dropout'
+NameOfExperiment = 'AutoEnformer results for None vs Vertical vs Quanvolution with CRX and no ancilla qubits'
+ExpID = 'none_vs_vert_vs_quanv_no_ancilla/CRX/king'
 
 if __name__ == "__main__":
     try:
@@ -49,6 +49,7 @@ if __name__ == "__main__":
                     "or modify 'ExpID' to a new value if you want to keep previous results.")
 
         with open(os.path.join(save_path, 'hyperparameters.json'), 'w') as f:
+            f.write(f'Experiment Name: {NameOfExperiment}\nBatch Size: {B}\nNumber of Epochs Selector: {N1}\nNumber of Epochs Classifier: {N2}\n')
             f.write('\nHyperparameters for Autoencoder\n')
             json.dump(p1, f, indent=4)
             f.write('\nHyperparameters for Classifier\n')  # Separator text between dictionaries
@@ -118,8 +119,6 @@ if __name__ == "__main__":
                         mlp_hidden_size=p1['mlp_size'], Attention_N = p1['Attention_N'], dropout=p1['dropout'], 
                         paralel = p1['paralel'], channels_last=False, q_stride= p1['q_stride']
                     )
-
-                    print(model1.q_stride)
 
                     # Train
                     test_mse, val_mse, params1 = qpctorch.training.train_and_evaluate(
