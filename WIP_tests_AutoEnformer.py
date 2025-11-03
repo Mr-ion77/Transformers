@@ -56,7 +56,7 @@ if __name__ == "__main__":
             json.dump(p2, f, indent=4)
 
         columns = [
-            'idx', 'lr', 'q_config', 'test_mse', 'val_mse', '#params1' , 'test_auc', 'test_acc', 'val_auc', 'val_acc', 'train_auc',  '#params2'
+            'idx', 'lr', 'q_config', 'test_mse', 'val_mse', '#params1' , 'test_auc', 'test_acc', 'val_auc', 'val_acc', 'train_auc', 'train_acc', '#params2'
         ]
 
         channels_last = False           # Set to True if last dimension of datasets tensors match channels dimension
@@ -264,7 +264,7 @@ if __name__ == "__main__":
                     print('\nTraining second model: classifier ViT on latent representations\n')
                     print(f'QUANTUM SETTING IS: {config} and current lr is: {p2["learning_rate"]}')
                     # Train second model
-                    test_auc, test_acc, val_auc, val_acc, train_auc, params2 = qpctorch.training.train_and_evaluate(
+                    test_auc, test_acc, val_auc, val_acc, train_auc, train_acc, params2 = qpctorch.training.train_and_evaluate(
                         model2, config_dataset[0], config_dataset[1], config_dataset[2], num_classes=7,
                         learning_rate=p2['learning_rate'], num_epochs=N2, device=device, mapping=False,
                         res_folder=str(aux_save_path), hidden_size=p2['hidden_size'], dropout=p2['dropout'],
@@ -276,7 +276,8 @@ if __name__ == "__main__":
                     row = {
                         'idx': idx, 
                             'lr': lr, 'q_config' : config, 'test_mse': test_mse, 'val_mse': val_mse, '#params1': params1, 
-                            'test_auc': test_auc, 'test_acc': test_acc, 'val_auc': val_auc, 'val_acc': val_acc, 'train_auc': train_auc,'#params2': params2,
+                            'test_auc': test_auc, 'test_acc': test_acc, 'val_auc': val_auc, 'val_acc': val_acc, 'train_auc': train_auc,
+                            'train_acc': train_acc ,'#params2': params2,
                             **p1, **p2
                     }
 

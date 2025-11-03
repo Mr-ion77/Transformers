@@ -410,7 +410,7 @@ class VisionTransformer(nn.Module):
     def __init__(self, img_size, num_channels, num_classes, patch_size, hidden_size, num_heads, num_transformer_blocks, mlp_hidden_size, Attention_N = 2,
                     quantum_mlp = False, quantum_classification = False, dropout= {'embedding_attn': 0.225, 'after_attn': 0.225, 'feedforward': 0.225, 'embedding_pos': 0.225}, 
                     channels_last=False, RD = 1, attention_selection = 'filter', selection_amount = None, special_cls = False,
-                    paralel = 1, q_stride = 1, connectivity = 'chain', patch_embedding_required = True
+                    paralel = 1, q_stride = 1, connectivity = 'chain', patch_embedding_required = 'true'
                     ):
         super().__init__()
 
@@ -438,6 +438,7 @@ class VisionTransformer(nn.Module):
         self.q_stride = q_stride
         self.connectivity = connectivity
         self.patch_embedding_required = patch_embedding_required
+        self.patch_size = patch_size
 
         # Splitting an image into patches and linearly projecting these flattened patches can be
         # simplified as a single convolution operation, where both the kernel size and the stride size
@@ -458,9 +459,9 @@ class VisionTransformer(nn.Module):
 
         
         # Transformer blocks with attention selection
-        self.transformer_blocks = nn.ModuleList( [nn.ModuleList([TransformerBlock_Attention_Chosen_QMLP(hidden_size // RD**i, num_heads, mlp_hidden_size, hidden_size // RD**(i + 1) , 
+        self.transformer_blocks = nn.ModuleList( [nn.ModuleList([TransformerBlock_Attention_Chosen_QMLP(hidden_size // self.RD**i, num_heads, mlp_hidden_size, hidden_size // self.RD**(i + 1) , 
                                                                                         Attention_N = self.Attention_N, quantum_mlp = self.quantum_mlp,
-                                                                                        dropout = self.dropout_values,
+                                                                                        dropout = self.dropout_values, RD = self.RD,
                                                                                         attention_selection = self.attention_selection, special_cls = self.special_cls,
                                                                                         q_stride = self.q_stride, connectivity = self.connectivity)
                                             for i in range(num_transformer_blocks)]) for j in range(paralel) ] )
@@ -486,37 +487,171 @@ class VisionTransformer(nn.Module):
     def get_patches_by_attention(self, x, paralel_branch = 0):
         """ 
         x: (batch_size, num_channels, img_size, img_size)
-        n_transformer_block: index of the transformer block to use for attention ranking
-        paralel_branch: index of the parallel branch to use for attention ranking
-        returns: indices of the selected patches, shape (batch_size, q_lr)
-                 and the expanded indices for gathering, shape (batch_size, q_lr, hidden_size)
-
-        Note: cls token is included in the attention calculation but is never selected (as it does not belong to the original image)
+        ...
+        returns: 
+            gathered_patches: (batch_size, q_lr, hidden_size)
+            sel_patch_indices_0_based: (batch_size, q_lr) <-- NEW
         """
-        x = self.patch_embed_sample(x)
         # x.shape = (batch_size, num_patches, hidden_size)
+        x_embedded = self.patch_embed_sample(x) 
 
         # CLS token
-        x = torch.cat((self.cls_token.expand(x.shape[0], -1, -1), x), dim=1) # We want to add the cls token so that it takes part in the attention calculation
+        # We want to add the cls token so that it takes part in the attention calculation
+        x_with_cls = torch.cat((self.cls_token.expand(x_embedded.shape[0], -1, -1), x_embedded), dim=1) 
         # x.shape = (batch_size, num_steps, hidden_size)
 
         # Positional embedding
-        x = self.dropout(x + self.pos_embedding)  # [B, S, D]
+        x_with_cls = self.dropout(x_with_cls + self.pos_embedding)  # [B, S, D]
 
         # Attention block
-        attn_input = self.transformer_blocks[paralel_branch][0].attn_norm(x)
+        attn_input = self.transformer_blocks[paralel_branch][0].attn_norm(x_with_cls)
+        # Note: Your original code assumes attn returns (output, map)
         _, attn_map = self.transformer_blocks[paralel_branch][0].attn(attn_input)
+
         # Rank patches by attention
         attn_indices = rank_patches_by_attention(attn_map)
-        # Remove CLS token from selection and select
-        sel_indices = torch.stack( [ attn_indices[i][ attn_indices[i] != 0 ][:self.q_lr] for i in range(attn_indices.size(0)) ])
         
-        return x.gather(1, sel_indices.unsqueeze(-1).expand(-1, -1, x.size(-1)) ) # Shape: (batch_size, q_lr, hidden_size)
+
+        # Remove CLS token (index 0) from selection and select top q_lr
+        sel_indices_with_cls_offset = torch.stack( [ attn_indices[i][ attn_indices[i] != 0 ][:self.q_lr] for i in range(attn_indices.size(0)) ])
+ 
+        # Gather the embedded patches (original function's output)
+        gathered_patches = x_with_cls.gather(1, sel_indices_with_cls_offset.unsqueeze(-1).expand(-1, -1, x_with_cls.size(-1)) ) # Shape: (batch_size, q_lr, hidden_size)
+        
+        # --- NEW ---
+        # Convert to 0-based patch indices (by subtracting 1 for the CLS token)
+        # This is the index relative to the *original* patch list (0 to num_patches-1)
+        sel_patch_indices_0_based = sel_indices_with_cls_offset - 1
+        
+        return gathered_patches, sel_patch_indices_0_based
+
+    def reconstruct_image_from_patches(self, selected_patches_flat, sel_patch_indices_0_based, original_image_shape):
+        """
+        Reconstructs an image from a pre-selected sequence of flat patches.
+        This version is more efficient if you already have the selected *pixel* patches
+        and just need to perform the "fold" (reconstruction) operation.
+
+        Args:
+            selected_patches_flat (torch.Tensor): The *pixel* data of selected patches.
+                                    Shape: (batch_size, q_lr, C * patch_size**2)
+            sel_patch_indices_0_based (torch.Tensor): 0-based indices of selected patches.
+                                        Shape: (batch_size, q_lr)
+            original_image_shape (tuple or list): Shape of the original image (B, C, H, W).
+        
+        Assumes 'self' has access to 'self.patch_size' (e.g., 16).
+        
+        Returns:
+            torch.Tensor: The reconstructed image with selected patches in place
+                        and the rest as black. Shape: (B, C, H, W)
+        """
+        
+        # --- 1. Get Patch and Image Dimensions ---
+        try:
+            P_h, P_w = self.patch_size, self.patch_size
+        except AttributeError:
+            raise AttributeError("self.patch_size must be defined in your class.")
+
+        B = selected_patches_flat.shape[0]
+        C, H, W = original_image_shape
+        grid_h = H // P_h
+        grid_w = W // P_w
+        num_patches_total = grid_h * grid_w
+        
+        q_lr = sel_patch_indices_0_based.size(1)
+        patch_pixel_dim = selected_patches_flat.size(2)
+
+        # --- Sanity Check ---
+        expected_dim = C * P_h * P_w
+        if patch_pixel_dim != expected_dim:
+            raise ValueError(
+                f"Input patch dimension ({patch_pixel_dim}) does not match "
+                f"Expected C * P_h * P_w ({expected_dim}). "
+                "This function expects flat *pixel* data, not embedded data (unless embed_dim == C*P*P)."
+            )
+
+        # --- 2. Reshape selected patches into (B, q_lr, C, P, P) ---
+        # This is the data we want to scatter
+        try:
+            selected_pixel_patches = selected_patches_flat.view(B, q_lr, C, P_h, P_w)
+        except RuntimeError as e:
+            raise RuntimeError(
+                f"Failed to reshape selected_patches_flat from "
+                f"({B}, {q_lr}, {patch_pixel_dim}) to ({B}, {q_lr}, {C}, {P_h}, {P_w}). "
+                f"Check if C, P_h, P_w match the flat dimension. Error: {e}"
+            )
+
+        # --- 3. Create a "Canvas" of Patches (all zeros) ---
+        # This will hold the selected patches at their correct 1D index
+        # Shape: (B, num_patches_total, C, P, P)
+        canvas_patches = torch.zeros(
+            (B, num_patches_total, C, P_h, P_w), 
+            device=selected_patches_flat.device, 
+            dtype=selected_patches_flat.dtype
+        )
+
+        # --- 4. Place Selected Patches onto the Canvas using scatter_ ---
+        # We scatter `selected_pixel_patches` into `canvas_patches` along dim=1 (the N dim)
+        # using the indices `sel_patch_indices_0_based`
+        
+        # We need to expand the indices for the scatter operation
+        # (B, q_lr) -> (B, q_lr, 1, 1, 1) -> (B, q_lr, C, P_h, P_w)
+        idx_scatter = sel_patch_indices_0_based.view(B, q_lr, 1, 1, 1).expand(-1, -1, C, P_h, P_w)
+        
+        canvas_patches.scatter_(dim=1, index=idx_scatter, src=selected_pixel_patches)
+
+        # --- 5. "Fold" the Patches Back into an Image ---
+        # First, reshape canvas_patches back to the format Fold expects:
+        # (B, N, C*P*P) -> (B, C*P*P, N)
+        canvas_flat = canvas_patches.view(B, num_patches_total, expected_dim).transpose(1, 2)
+        
+        # Fold stitches the patches back together
+        fold = nn.Fold(output_size=(H, W), kernel_size=(P_h, P_w), stride=(P_h, P_w))
+        reconstructed_image = fold(canvas_flat)
+        
+        return reconstructed_image
+
+
+    def get_selected_pixel_patches(self, x_image, sel_patch_indices_0_based):
+        """
+        Helper function to extract the flat *pixel* patches from an image
+        given their indices. This provides the `selected_patches_flat`
+        tensor needed for `reconstruct_image_from_patches_v2`.
+        
+        Args:
+            x_image (torch.Tensor): The original image. Shape: (B, C, H, W)
+            sel_patch_indices_0_based (torch.Tensor): 0-based indices of selected patches.
+                                        Shape: (batch_size, q_lr)
+        
+        Returns:
+            torch.Tensor: The selected *pixel* patches, flat. Shape: (B, q_lr, C*P*P)
+        """
+        P_h, P_w = self.patch_size, self.patch_size
+        B, C, H, W = x_image.shape
+        
+        # --- 1. Extract Original Pixel Patches using Unfold ---
+        unfold = nn.Unfold(kernel_size=(P_h, P_w), stride=(P_h, P_w))
+        # pixel_patches_flat shape: (B, C * P_h * P_w, num_patches_total)
+        pixel_patches_flat = unfold(x_image)
+        
+        # Transpose to (B, num_patches_total, C * P_h * P_w) for gathering
+        pixel_patches_all = pixel_patches_flat.transpose(1, 2)
+
+        # --- 2. Gather the Selected Patches ---
+        # Expand indices to gather full patch data
+        # (B, q_lr) -> (B, q_lr, 1) -> (B, q_lr, C*P*P)
+        patch_pixel_dim = C * P_h * P_w
+        idx_expanded = sel_patch_indices_0_based.unsqueeze(-1).expand(-1, -1, patch_pixel_dim)
+        
+        # Gather the actual pixel patches
+        # selected_patches_flat shape: (B, q_lr, C*P*P)
+        selected_patches_flat = pixel_patches_all.gather(1, idx_expanded)
+        
+        return selected_patches_flat
 
 
     def forward(self, x):
 
-        if self.patch_embedding_required:
+        if self.patch_embedding_required == 'true':
             x = self.patch_embed_sample(x)
             # Positional embedding
 
@@ -526,8 +661,11 @@ class VisionTransformer(nn.Module):
 
             x = self.dropout(x + self.pos_embedding)  # [B, S, D]
             # x.shape = (batch_size, num_patches, hidden_size)
+        elif self.patch_embedding_required == 'flatten':
+            x = x.view((x.shape[0], x.shape[1], -1))
 
         # CLS token (Even if we haven't applied patch embedding here, we assume the input x doesn't have the cls token included yet)
+        #print(f"Shapes, x and cls: {x.shape}, {self.cls_token.expand(x.shape[0], -1, -1).shape}")
         x = torch.cat((self.cls_token.expand(x.shape[0], -1, -1), x), dim=1)
         # x.shape = (batch_size, num_steps, hidden_size)
 
@@ -557,41 +695,131 @@ class VisionTransformer(nn.Module):
 
         # x.shape = (batch_size, num_classes)
         return x, attn_maps
+
+    def save_reconstructed_after_selection(self , notrans_train_dl : torch.utils.data.DataLoader , save_path = "prov/selected_dataset",n_batches : int = 1 ) -> None:
+        from pathlib import Path
+        from PIL import Image
+        import numpy as np
+
+        save_path_rec = Path(save_path + "/reconstructed")
+        save_path_ori = Path(save_path + "/ori")
+        save_path = Path(save_path)
+        save_path.mkdir(parents=True, exist_ok=True)
+        save_path_rec.mkdir(parents=True, exist_ok=True)
+        save_path_ori.mkdir(parents=True, exist_ok=True)
+        
+        param = next(self.transformer_blocks[0][0].parameters(), None)
+        if param is not None:
+            device = param.device
+        else:
+            raise ValueError("Could not acces model device")
+
+        count = 0
+
+        for img, lbl, idx in notrans_train_dl:
+            count += 1
+            # Move batch to the same device as the model (use non_blocking if dataloader has pin_memory=True)
+            img = img.to(device, non_blocking=True)
+            shape = img.shape if img.ndim == 3 else img.shape[1:] if img.ndim == 4 else (1, *img.shape)
+            _, indices_sel = self.get_patches_by_attention(img)
+            imgs_sel = self.get_selected_pixel_patches(img, indices_sel)
+            reconstructed_imgs = self.reconstruct_image_from_patches(imgs_sel,indices_sel, shape)
+            # reconstructed_imgs is expected as a torch.Tensor with shape (B, C, H, W) or (B, H, W, C)
+            for b_i in range(reconstructed_imgs.shape[0]):
+                recon = reconstructed_imgs[b_i].detach().cpu().numpy()
+                # If channel-first (C,H,W) -> convert to H,W,C
+                if recon.ndim == 3 and recon.shape[0] in (1, 3):
+                    recon = np.transpose(recon, (1, 2, 0))
+                # If single-channel with last dim == 1 -> squeeze
+                if recon.ndim == 3 and recon.shape[2] == 1:
+                    recon = recon[:, :, 0]
+                # Normalize to 0..255 uint8
+                minv, maxv = float(recon.min()), float(recon.max())
+                if maxv <= 1.0 and minv >= 0.0:
+                    img_uint8 = (recon * 255.0).astype(np.uint8)
+                else:
+                    rng = maxv - minv + 1e-8
+                    img_uint8 = ((recon - minv) / rng * 255.0).astype(np.uint8)
+                # Create PIL image (grayscale or RGB)
+                if img_uint8.ndim == 2:
+                    im = Image.fromarray(img_uint8, mode='L')
+                else:
+                    if img_uint8.shape[2] > 3:
+                        img_uint8 = img_uint8[:, :, :3]
+                    im = Image.fromarray(img_uint8)
+                # Try to resolve a dataset index from the dataloader 'idx' (tensor or list), fallback to batch-local index
+                try:
+                    sample_idx = int(idx[b_i].item())
+                except Exception:
+                    try:
+                        sample_idx = int(idx[b_i])
+                    except Exception:
+                        sample_idx = b_i
+                # Save reconstructed image
+                fname = save_path_rec / f"recon_{sample_idx}_{b_i}.png"
+                im.save(str(fname))
+                # Also save the original input image in save_path_ori using the same index
+                try:
+                    orig = img[b_i].detach().cpu().numpy()
+                except Exception:
+                    # fallback if img is already numpy or other format
+                    orig = np.array(img[b_i])
+                if orig.ndim == 3 and orig.shape[0] in (1, 3):
+                    orig = np.transpose(orig, (1, 2, 0))
+                if orig.ndim == 3 and orig.shape[2] == 1:
+                    orig = orig[:, :, 0]
+                minv_o, maxv_o = float(orig.min()), float(orig.max())
+                if maxv_o <= 1.0 and minv_o >= 0.0:
+                    orig_uint8 = (orig * 255.0).astype(np.uint8)
+                else:
+                    rng_o = maxv_o - minv_o + 1e-8
+                    orig_uint8 = ((orig - minv_o) / rng_o * 255.0).astype(np.uint8)
+                if orig_uint8.ndim == 2:
+                    im_o = Image.fromarray(orig_uint8, mode='L')
+                else:
+                    if orig_uint8.shape[2] > 3:
+                        orig_uint8 = orig_uint8[:, :, :3]
+                    im_o = Image.fromarray(orig_uint8)
+                fname_o = save_path_ori / f"origin_{sample_idx}_{b_i}.png"
+                im_o.save(str(fname_o))
+            # Optional: break after first batch when testing to avoid saving whole dataset
+            if count >= n_batches:
+                break
     
 class Encoder(nn.Module):
-                    def __init__(self, encoder_layers, dropout_pos):
-                        super(Encoder, self).__init__()
-                        self.encoder_layers = encoder_layers
-                        self.dropout_pos = dropout_pos
-                        self.paralel = len(self.encoder_layers)
-                        self.num_transformer_blocks = len(self.encoder_layers[0])
+    def __init__(self, encoder_layers, dropout_pos):
+        super(Encoder, self).__init__()
+        self.encoder_layers = encoder_layers
+        self.dropout_pos = dropout_pos
+        self.paralel = len(self.encoder_layers)
+        self.num_transformer_blocks = len(self.encoder_layers[0])
 
 
-                    def forward(self, x, pos_embedding):
-                        # Apply patch and position embeddings, including the class token
-                      
-                        x += pos_embedding[:, :(x.shape[1])]
-                        out = self.dropout_pos(x)
-                        # Repeat x for each parallel branch
-                        x_parallel = x.unsqueeze(0).repeat(self.paralel, 1, 1, 1)  # [P, B, S, D]
+    def forward(self, x, pos_embedding):
+        # Apply patch and position embeddings, including the class token
+        
+        x += pos_embedding[:, :(x.shape[1])]
+        out = self.dropout_pos(x)
+        # Repeat x for each parallel branch
+        x_parallel = x.unsqueeze(0).repeat(self.paralel, 1, 1, 1)  # [P, B, S, D]
 
-                        last_layers_outputs = []
-                        outputs = []
+        last_layers_outputs = []
+        outputs = []
 
-                        for i in range(self.paralel):
-                            out = x_parallel[i]  # [B, S, D]
+        for i in range(self.paralel):
+            out = x_parallel[i]  # [B, S, D]
 
-                            for j in range(self.num_transformer_blocks):
-                                out, _ = self.encoder_layers[i][j](out)  # [B, S, D], attn: [B, H, S, S] or similar #type: ignore
+            for j in range(self.num_transformer_blocks):
+                out, _ = self.encoder_layers[i][j](out)  # [B, S, D], attn: [B, H, S, S] or similar #type: ignore
 
-                            outputs.append(out)
-                            if type(out) != torch.Tensor:
-                                raise ValueError("The output is not a tensor.")
-                            
-                        if type(out) != torch.Tensor:
-                            raise ValueError("The output is not a tensor.")
+            outputs.append(out)
+            if type(out) != torch.Tensor:
+                raise ValueError("The output is not a tensor.")
+            
+        if type(out) != torch.Tensor:
+            raise ValueError("The output is not a tensor.")
 
-                        return torch.stack(outputs, dim = 0)  # Shape: (paralel, batch_size, num_patches + 1, hidden_size)
+        return torch.stack(outputs, dim = 0)  # Shape: (paralel, batch_size, num_patches + 1, hidden_size)
 
 class Decoder(nn.Module):
     def __init__(self, decoder_layers, mlp_hidden_size, hidden_size):

@@ -106,16 +106,18 @@ def relabel_dataset(dataset, majority_label, majority_or_others='majority'):
     return TensorDataset(image_tensor, label_tensor, index_tensor)
 
 
-def datasets_to_dataloaders(train_dataset, valid_dataset, test_dataset, **dataloader_kwargs):
+def datasets_to_dataloaders( datasets, **dataloader_kwargs):
     """Returns dataloaders for the given datasets"""
-    shape = train_dataset[0][0].shape  # Assuming all datasets have the same shape
-    train_dataloader = DataLoader(train_dataset, shuffle=True, **dataloader_kwargs)        # shuffle=True en train
-    valid_dataloader = DataLoader(valid_dataset, **dataloader_kwargs)      #shuffle=False en los otros
-    test_dataloader = DataLoader(test_dataset, **dataloader_kwargs)
-    return train_dataloader, valid_dataloader, test_dataloader, shape
+    shape = datasets[0]['data'][0][0].shape  # Assuming all datasets have the same shape
+
+    dataloader_list = []
+    for dataset in datasets:
+        dataloader_list.append( DataLoader(dataset['data'], shuffle=dataset['split'] == 'train', **dataloader_kwargs)     )
+
+    return *dataloader_list, shape
 
 
-def get_medmnist_dataloaders(pixel: int = 28, data_flag: str = 'breastmnist', **dataloader_kwargs) -> tuple:
+def get_medmnist_dataloaders(pixel: int = 28, data_flag: str = 'breastmnist', extra_tr_without_trans = False, **dataloader_kwargs) -> tuple:
     """Returns dataloaders for the MedMNIST dataset"""
     # Transformaciones
     n_channels = 3
@@ -156,13 +158,14 @@ def get_medmnist_dataloaders(pixel: int = 28, data_flag: str = 'breastmnist', **
 
             return new_instance
 
+    train_dataset = { 'data': IndexedMedMNIST(split='train', transform=train_transform, download=True), 'split':'train'}    # Construye el dataset a partir de la clase obtenida
+    valid_dataset = { 'data': IndexedMedMNIST(split='val', transform=valid_transform, download=True), 'split':'val'} 
+    test_dataset = { 'data': IndexedMedMNIST(split='test', transform=valid_transform, download=True), 'split':'test'} 
+    if extra_tr_without_trans:
+        no_trans_train_dataset = { 'data': IndexedMedMNIST(split='train', transform=valid_transform, download=True),'split':'train'} 
+        return datasets_to_dataloaders( [no_trans_train_dataset, train_dataset, valid_dataset, test_dataset], **dataloader_kwargs)
 
-    train_dataset = IndexedMedMNIST(split='train', transform=train_transform, download=True)    # Construye el dataset a partir de la clase obtenida
-    valid_dataset = IndexedMedMNIST(split='val', transform=valid_transform, download=True)
-    test_dataset = IndexedMedMNIST(split='test', transform=valid_transform, download=True)
-
-
-    return datasets_to_dataloaders(train_dataset, valid_dataset, test_dataset, **dataloader_kwargs)
+    return datasets_to_dataloaders([train_dataset, valid_dataset, test_dataset], **dataloader_kwargs)
 
 # Function for: Quantum preprocessed datasets
 
@@ -170,11 +173,9 @@ q_train_transforms = transforms.Compose([
         transforms.RandomRotation(90),
         transforms.RandomHorizontalFlip(),
         transforms.RandomVerticalFlip(),
-        #MinMaxScalePerChannel(0, np.pi)
     ])
 
 q_valid_transforms = transforms.Compose([
-        #MinMaxScalePerChannel(0, np.pi)
     ])
 
 class TransformedTensorDataset(torch.utils.data.Dataset):

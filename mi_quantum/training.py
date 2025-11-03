@@ -9,12 +9,68 @@ import os
 import errno
 import shutil
 import pandas as pd
+import random
 from PIL import Image 
 import matplotlib.pyplot as plt
 import torch.nn.functional as F
 import torch.nn as nn
+import kornia.augmentation as K
+import kornia.geometry.transform as T
+import kornia.constants as C
 from torch.optim.lr_scheduler import StepLR
 from torch.optim.lr_scheduler import ReduceLROnPlateau
+
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+
+
+
+class CustomRotation(nn.Module):
+    """
+    A custom wrapper for kornia's rotate function that accepts padding_mode.
+    This mimics K.RandomRotation but exposes the padding_mode argument.
+    """
+    def __init__(self, degrees, same_on_batch=False, padding_mode='zeros', prob = 0.5):
+        super().__init__()
+        # Store degrees as a float tensor (will be moved to the input device in forward)
+        # Use as_tensor so lists/tuples also work and we keep a numeric dtype.
+        self.degrees = torch.as_tensor(degrees, dtype=torch.float32)
+        self.same_on_batch = same_on_batch
+        self.padding_mode = padding_mode
+        # store provided probability (use the passed value)
+        self.prob = prob
+        
+    def forward(self, x, prob=None):
+        # Avoid using `self` in default args; resolve the effective prob here
+        if prob is None:
+            prob = self.prob
+        # 1. Decide whether to apply the rotation.
+        # random.random() returns a float in [0,1). We apply rotation with probability `prob`.
+        if random.random() >= prob:
+            return x
+        
+        # Get a random angle between -degrees and +degrees
+        # (torch.rand * 2 - 1) creates a random number in [-1, 1]
+        
+        # Move stored degrees to the same device as the input to avoid device-mismatch errors
+        deg = self.degrees.to(x.device)
+        if self.same_on_batch:
+            # Generate ONE angle for the entire batch
+            angle = (torch.rand(1, device=x.device) * 2 - 1) * deg
+            # Repeat this angle for every item in the batch
+            angle = angle.repeat(x.shape[0])
+        else:
+            # Generate a different angle for each item in the batch
+            angle = (torch.rand(x.shape[0], device=x.device) * 2 - 1) * deg
+
+        # 2. Apply the functional rotation
+        # T.rotate is the function that does the actual work
+        return T.rotate(
+            x, 
+            angle, 
+            mode='bilinear', 
+            padding_mode=self.padding_mode
+        )
+
 
 def save_attention(output,image,dir,patch_size):
     attentions = output.attentions[-1] # we are only interested in the attention maps of the last layer
@@ -148,7 +204,8 @@ def train_and_evaluate(
     test_dataloader: torch.utils.data.DataLoader, num_classes: int, num_epochs: int, device: torch.device, mapping: bool = False, 
     learning_rate: float = 1e-4, res_folder: str = "results_cc", hidden_size: int = 12, patch_size: int = 4, num_heads: int = 1, 
     dropout: dict = {'embedding_attn': 0.225, 'after_attn': 0.225, 'feedforward': 0.225, 'embedding_pos': 0.225}, num_transf: int = 1,
-    mlp: int = 1, wd: float = 0.1, verbose: bool = False, patience : int = -1, scheduler_factor = 0.98, autoencoder = False, save_reconstructed_images = False) -> None:
+    mlp: int = 1, wd: float = 0.1, verbose: bool = False, patience : int = -1, scheduler_factor : float = 0.98, autoencoder : bool = False, 
+    save_reconstructed_images : bool = False, augmentation_prob: float = 0.5, val_train_pond = 1) -> None:
     """Trains the given model on the given dataloaders for the given parameters"""
     start_event = torch.cuda.Event(enable_timing=True)
     end_event = torch.cuda.Event(enable_timing=True)
@@ -169,6 +226,15 @@ def train_and_evaluate(
     number_of_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
 
     print(f"Number of trainable parameters: {number_of_parameters}")
+
+    augmentation = augmentation_prob > 0
+
+    if augmentation:
+        aug_pipeline = nn.Sequential(
+            # Make sure you've defined or imported CustomRotation
+            CustomRotation(degrees=45, same_on_batch=True, padding_mode='border', prob = augmentation_prob),
+            K.RandomHorizontalFlip(p=augmentation_prob, same_on_batch=True)
+        ).to(device)
 
     if autoencoder:
         criterion = nn.MSELoss()
@@ -210,6 +276,20 @@ def train_and_evaluate(
                 if verbose:
                     print(f" Zero grad ({time.time()-operation_start_time:.2f}s)")
                     operation_start_time = time.time()
+
+                # Inputs shape is either (B, C, H, W) or (B, S, C, P, P)    S= seq_len, P=patch_size
+                if augmentation:
+
+                    D = inputs.ndim
+
+                    if D == 5:
+                        B, S, C, H, W = inputs.shape
+                        inputs = inputs.view( (B*S, C, H, W) )
+                    
+                    inputs = aug_pipeline(inputs)
+
+                    if D == 5:
+                        inputs = inputs.view( (B, S, C, H, W) )
                 
                 outputs = model(inputs)
 
@@ -289,7 +369,7 @@ def train_and_evaluate(
 
             val_loss /= len(valid_dataloader)
             if not autoencoder:
-                val_auc = 100.0 * roc_auc_score(y_trueVal, y_predVal, multi_class='ovr')
+                val_auc = (100.0 * roc_auc_score(y_trueVal, y_predVal, multi_class='ovr'))* val_train_pond + tr_auc * (1-val_train_pond)
 
             # Actualiza el learning rate con StepLR
             scheduler.step()  # Reduce LR a intervalos regulares
@@ -517,6 +597,6 @@ def train_and_evaluate(
                     save_attention(pred, images, dir_misclassified_test,patch_size)  # Use attention for misclassified
 
     if not autoencoder:
-        return test_auc, test_acc, best_val_auc, best_val_acc, best_tr_auc, number_of_parameters
+        return test_auc, test_acc, best_val_auc, best_val_acc, best_tr_auc, best_tr_acc, number_of_parameters
     else:
         return mse, best_val_mse, number_of_parameters

@@ -50,7 +50,7 @@ if __name__ == "__main__":
             
 
         columns = [
-            'idx', 'filter_config', 'test_auc', 'test_acc', 'val_auc', 'val_acc', 'train_auc',  '#params'
+            'idx', 'filter_config', 'test_auc', 'test_acc', 'val_auc', 'val_acc', 'train_auc', 'train_acc', '#params'
         ]
 
         channels_last = False           # Set to True if last dimension of datasets tensors match channels dimension
@@ -98,7 +98,7 @@ if __name__ == "__main__":
                 )
 
                 # Train model
-                test_auc, test_acc, val_auc, val_acc, train_auc, params = qpctorch.training.train_and_evaluate(
+                test_auc, test_acc, val_auc, val_acc, train_auc, train_acc, params = qpctorch.training.train_and_evaluate(
                     model, train_dl, val_dl, test_dl, num_classes=7,
                     learning_rate=p['learning_rate'], num_epochs=N, device=device, mapping=False,
                     res_folder=str(aux_save_path), hidden_size=p['hidden_size'], dropout=p['dropout'],
@@ -112,7 +112,7 @@ if __name__ == "__main__":
                 row = {
                     'idx': idx, 
                         'filter_config': filter_config, 'test_auc': test_auc, 'test_acc': test_acc, 'val_auc': val_auc, 
-                        'val_acc': val_acc, 'train_auc': train_auc,'#params': params
+                        'val_acc': val_acc, 'train_auc': train_auc, 'train_acc': train_acc,'#params': params
                         
                 }
 
