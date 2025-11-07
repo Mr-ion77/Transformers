@@ -18,25 +18,26 @@ print(f"Using device: {device}")
 
 B = 256
 N1 = 125 # Number of epochs Autoencoder
-N2 = 100  # Number of epochs Classifier
+N2 = 115  # Number of epochs Classifier
 
 # Hyperparams
 p1 = {
     'learning_rate': 0.0025, 'hidden_size': 48, 'dropout': {'embedding_attn': 0.225, 'after_attn': 0.225, 'feedforward': 0.225, 'embedding_pos': 0.225},
     'quantum' : False, 'num_head': 4, 'Attention_N' : 2, 'num_transf': 2, 'mlp_size': 5, 'patch_size': 4, 'weight_decay': 1e-7, 'attention_selection': 'none', 
-    'selection_amount': 20, 'RD': 1, 'connectivity' : 'star' ,'entangle_method' : 'CRX', 'special_cls' : False, 'paralel': 1, 'patience': -1, 
-    'scheduler_factor': 0.985, 'q_stride': 1, 'ancilla' : 0,  'augmentation_prob' : 1
+    'selection_amount': 49, 'RD': 1, 'connectivity' : 'star' ,'entangle_method' : 'CRX', 'special_cls' : False, 'paralel': 1, 'patience': -1, 
+    'scheduler_factor': 0.985, 'q_stride': 1, 'ancilla' : 0,  'augmentation_prob' : 1, 'val_train_pond' : 1
 }
 
 p2 = {
-    'learning_rate': 0.0025, 'hidden_size': 48, 'dropout': {'embedding_attn': 0.225, 'after_attn': 0.3, 'feedforward': 0.225, 'embedding_pos': 0.3},
+    'learning_rate': 0.0025, 'hidden_size': 48, 'dropout': {'embedding_attn': 0.3, 'after_attn': 0.3, 'feedforward': 0.3, 'embedding_pos': 0.3},
     'quantum' : False, 'num_head': 4, 'Attention_N' : 2, 'num_transf': 2, 'mlp_size': 5, 'patch_size': 4, 'weight_decay': 1e-7, 'attention_selection': 'filter',
-    'selection_amount': 15, 'RD': 1, 'special_cls' : False, 'paralel': 2, 'patience': -1, 'scheduler_factor': 0.975, 'q_stride': 1, 'augmentation_prob' : 0
+    'selection_amount': 25, 'RD': 1, 'special_cls' : False, 'paralel': 2, 'patience': -1, 'scheduler_factor': 0.975, 'q_stride': 1, 'augmentation_prob' : 0,
+    'val_train_pond' : 0.5
 }
 
 columns = [
     
-    'idx', 'channels', 'sel_amount', 'method', 'test_auc_sel', 'test_acc_sel', '#params_sel' , 'test_auc', 'test_acc', 'val_auc', 'val_acc', 'train_auc', 'train_acc', '#params_class'
+    'idx', 'channels', 'selection_amount', 'val_train_pond', 'method', 'test_auc_sel', 'test_acc_sel', '#params_sel' , 'test_auc', 'test_acc', 'val_auc', 'val_acc', 'train_auc', 'train_acc', '#params_class'
 
 ]
 
@@ -49,7 +50,7 @@ Trained_Selector_Once = False
 
 
 NameOfExperiment = f'SelFormer results for 2x2 Half_Augmentation and varying which channels to measure (control)'
-ExpID = 'none_vs_patch/no_ancilla/channels'
+ExpID = 'none_vs_patch/no_ancilla/channels_with_train_ponderatorv2'
 
 if __name__ == "__main__":
     try:
@@ -83,13 +84,13 @@ if __name__ == "__main__":
         num_channels = shape[-1] if channels_last else shape[0]
         img_size = shape[1]  # Assuming square images
 
-        q_config = {'none', 'patchwise'}
+        q_config = {'none'}
         progress_levels = [0, 25, 50, 75, 100]
         # Grid search loop
         if SendToTelegramBool:
                 SendToTelegram(progress = 0)   
 
-        for idx in range(NExperiments):
+        for idx in range(1):
             progress = int( 100* (idx+1)//NExperiments )
             if SendToTelegramBool and progress in progress_levels:
                 SendToTelegram(progress = progress)                
@@ -101,10 +102,10 @@ if __name__ == "__main__":
 
             # Determine if quantum processing is enabled based on q_config
             # q_config can be a string or a list/tuple; handle both
-            NoneBool, PatchBool, QuanvBool = 'none' in q_config, 'patchwise' in q_config, 'quanvolution' in q_config
-            print(f"Current quantum configuration:\nNormal latent representations: {NoneBool}\nPatchwise Quantum latent representations: {PatchBool}\nQuanvolution latent representations: {QuanvBool}")
+            NoneBool, PatchBool = 'none' in q_config, 'patchwise' in q_config
+            print(f"Current quantum configuration:\nNormal latent representations: {NoneBool}\nPatchwise Quantum latent representations: {PatchBool}")
 
-            for channels_out in [ [3], [2, 3], [1, 2, 3], [0, 1, 2, 3]  ]:
+            for channels_out in [ [3]  ]:
 
                 if (not Trained_Selector_Once) or RepeatSelector:
                     Trained_Selector_Once = True
@@ -127,7 +128,7 @@ if __name__ == "__main__":
                         res_folder=str(save_path), hidden_size=p1['hidden_size'], dropout=p1['dropout'],
                         num_heads=p1['num_head'], patch_size=p1['patch_size'], num_transf=p1['num_transf'],
                         mlp=p1['mlp_size'], wd=p1['weight_decay'], patience= p1['patience'], scheduler_factor=p1['scheduler_factor'], autoencoder=False,
-                        augmentation_prob = p1['augmentation_prob']
+                        augmentation_prob = p1['augmentation_prob'], val_train_pond=p1['val_train_pond']
                     )
 
                     print(f"\nSelector training completed succesfully.\nTest, Val, Train AUC (first step): {test_auc_sel:.5f}, {val_auc_sel:.5f}, {train_auc_sel:.5f}\n")
@@ -161,12 +162,6 @@ if __name__ == "__main__":
                         with torch.no_grad():
 
                             B_img = images.shape[0]
-
-                            if NoneBool:
-                                normal_outs = []
-                            if PatchBool:
-                                quantum_outs = []
-
                             selected_patches = model1.get_patches_by_attention(x = images, paralel_branch = 0)[0]
 
                             if NoneBool:
@@ -219,47 +214,51 @@ if __name__ == "__main__":
 
                 for config in list(q_config):
 
-                    config_dataset = Latents[config]
-                    shape2 = config_dataset[-1]  # Shape of one sample in the test set
-                    print("Shape2:", shape2)
+                    for idx in range(NExperiments):
 
-                    model2 = qpctorch.quantum.vit.VisionTransformer(
-                        img_size=shape[-1], num_channels= 3, num_classes=num_classes,
-                        patch_size=p2['patch_size'], hidden_size= shape2[-1], num_heads=p2['num_head'], Attention_N = p2['Attention_N'],
-                        num_transformer_blocks=p2['num_transf'], attention_selection= p2['attention_selection'], special_cls = p2['special_cls'], 
-                        mlp_hidden_size=p2['mlp_size'], quantum_mlp = False, dropout = p2['dropout'], channels_last=False, quantum_classification = False,
-                        paralel = p2['paralel'], RD = p2['RD'], q_stride = p2['q_stride'], connectivity = 'chain', patch_embedding_required = 'false'
-                    )
+                        for val_train_pond in [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1]:
 
-                    print('\nTraining second model: classifier ViT on latent representations\n')
-                    print(f'QUANTUM SETTING IS: {config} and current lr is: {p2["learning_rate"]}')
-                    
-                    # Train second model
-                    test_auc, test_acc, val_auc, val_acc, train_auc, train_acc, params = qpctorch.training.train_and_evaluate(
-                        model2, config_dataset[0], config_dataset[1], config_dataset[2], num_classes=7,
-                        learning_rate=p2['learning_rate'], num_epochs=N2, device=device, mapping=False,
-                        res_folder=str(save_path), hidden_size=p2['hidden_size'], dropout=p2['dropout'],
-                        num_heads=p2['num_head'], patch_size=p2['patch_size'], num_transf=p2['num_transf'],
-                        mlp=p2['mlp_size'], wd=p2['weight_decay'], patience= p2['patience'], scheduler_factor=p2['scheduler_factor'], 
-                        autoencoder=False, augmentation_prob = p2['augmentation_prob']
-                    )
-                    
-                    # Save results
-                    row = {
-                        'idx': idx, 
-                            'channels': len(channels_out) if config == "patchwise" else 0,  'sel_amount': 20, 'method': config,
-                            'test_auc_sel': test_auc_sel, 'test_acc_sel': test_acc_sel, '#params_sel': params_sel, 
-                            'test_auc': test_auc, 'test_acc': test_acc, 'val_auc': val_auc, 'val_acc': val_acc, 'train_auc': train_auc, 'train_acc' : train_acc,
-                            '#params_class': params
-                    }
+                            config_dataset = Latents[config]
+                            shape2 = config_dataset[-1]  # Shape of one sample in the test set
+                            print("Shape2:", shape2)
 
-                    pd.DataFrame([row], columns=columns).to_csv(
-                        csv_path, mode='a', header=False, index=False
-                    )
+                            model2 = qpctorch.quantum.vit.VisionTransformer(
+                                img_size=shape[-1], num_channels= 3, num_classes=num_classes,
+                                patch_size=p2['patch_size'], hidden_size= shape2[-1], num_heads=p2['num_head'], Attention_N = p2['Attention_N'],
+                                num_transformer_blocks=p2['num_transf'], attention_selection= p2['attention_selection'], special_cls = p2['special_cls'], 
+                                mlp_hidden_size=p2['mlp_size'], quantum_mlp = False, dropout = p2['dropout'], channels_last=False, quantum_classification = False,
+                                paralel = p2['paralel'], RD = p2['RD'], q_stride = p2['q_stride'], connectivity = 'chain', patch_embedding_required = 'false'
+                            )
+
+                            print('\nTraining second model: classifier ViT on latent representations\n')
+                            print(f'QUANTUM SETTING IS: {config} and current lr is: {p2["learning_rate"]}')
+                            
+                            # Train second model
+                            test_auc, test_acc, val_auc, val_acc, train_auc, train_acc, params = qpctorch.training.train_and_evaluate(
+                                model2, config_dataset[0], config_dataset[1], config_dataset[2], num_classes=7,
+                                learning_rate=p2['learning_rate'], num_epochs=N2, device=device, mapping=False,
+                                res_folder=str(save_path), hidden_size=p2['hidden_size'], dropout=p2['dropout'],
+                                num_heads=p2['num_head'], patch_size=p2['patch_size'], num_transf=p2['num_transf'],
+                                mlp=p2['mlp_size'], wd=p2['weight_decay'], patience= p2['patience'], scheduler_factor=p2['scheduler_factor'], 
+                                autoencoder=False, augmentation_prob = p2['augmentation_prob'], val_train_pond=p2['val_train_pond']
+                            )
+                            
+                            # Save results
+                            row = {
+                                'idx': idx, 
+                                    'channels': len(channels_out) if config == "patchwise" else 0,  'selection_amount': p1['selection_amount'], 'val_train_pond': val_train_pond ,'method': config,
+                                    'test_auc_sel': test_auc_sel, 'test_acc_sel': test_acc_sel, '#params_sel': params_sel, 
+                                    'test_auc': test_auc, 'test_acc': test_acc, 'val_auc': val_auc, 'val_acc': val_acc, 'train_auc': train_auc, 'train_acc' : train_acc,
+                                    '#params_class': params
+                            }
+
+                            pd.DataFrame([row], columns=columns).to_csv(
+                                csv_path, mode='a', header=False, index=False
+                            )
 
 
         if SendToTelegramBool:
-            SendToTelegram(csv_file = csv_path, columns = ['channels', 'test_auc'],
+            SendToTelegram(csv_file = csv_path, columns = ['channels', 'val_train_pond', 'test_auc'],
                         title = NameOfExperiment )
 
     except Exception as e:

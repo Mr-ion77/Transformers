@@ -161,6 +161,7 @@ def get_medmnist_dataloaders(pixel: int = 28, data_flag: str = 'breastmnist', ex
     train_dataset = { 'data': IndexedMedMNIST(split='train', transform=train_transform, download=True), 'split':'train'}    # Construye el dataset a partir de la clase obtenida
     valid_dataset = { 'data': IndexedMedMNIST(split='val', transform=valid_transform, download=True), 'split':'val'} 
     test_dataset = { 'data': IndexedMedMNIST(split='test', transform=valid_transform, download=True), 'split':'test'} 
+    
     if extra_tr_without_trans:
         no_trans_train_dataset = { 'data': IndexedMedMNIST(split='train', transform=valid_transform, download=True),'split':'train'} 
         return datasets_to_dataloaders( [no_trans_train_dataset, train_dataset, valid_dataset, test_dataset], **dataloader_kwargs)

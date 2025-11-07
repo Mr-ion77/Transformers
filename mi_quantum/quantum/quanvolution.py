@@ -91,7 +91,11 @@ class QuantumConv2D(nn.Module):
 
         x = x if self.channels_last == False else x.permute(0, 3, 1, 2)
 
-        B, C, H, W = x.shape 
+        if x.ndim == 4:
+            B, C, H, W = x.shape 
+        elif x.ndim == 3:
+            B, C, H, W = 1 , *x.shape
+
         H_out = (H + self.padding['Up'] + self.padding['Down'] - self.patch_size) // self.stride + 1
         W_out = (W + self.padding['Left'] + self.padding['Right'] - self.patch_size) // self.stride + 1
 
