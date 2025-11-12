@@ -50,7 +50,6 @@ class QuantumKernel(nn.Module):
             ancilla_tensor = torch.zeros(*x.shape[:-1], self.ancilla, device=x.device, dtype=x.dtype)
             x = torch.cat([x, ancilla_tensor], dim=-1)
 
-
         circuit_out = self.circuit(x)
 
         return circuit_out[...,  self.channels_out]
@@ -95,6 +94,7 @@ class QuantumConv2D(nn.Module):
             B, C, H, W = x.shape 
         elif x.ndim == 3:
             B, C, H, W = 1 , *x.shape
+        q = len(self.channels_out) 
 
         H_out = (H + self.padding['Up'] + self.padding['Down'] - self.patch_size) // self.stride + 1
         W_out = (W + self.padding['Left'] + self.padding['Right'] - self.patch_size) // self.stride + 1
@@ -117,17 +117,22 @@ class QuantumConv2D(nn.Module):
                 raise ValueError(f"Expected input dim {self.kernel.circuit.num_qubits - self.ancilla}, got {patch_vectors.shape[1]}")
 
             # Process with the Kernel — ideally batched
-            kernel_out = self.kernel(patch_vectors)  # expected output: (B*L, out_dim)
+            kernel_out = self.kernel(patch_vectors)  # expected output: (B*L, q)
 
             # Reshape back to (B, L, out_dim)
-            kernel_out = kernel_out.view(B, -1, kernel_out.shape[-1])  # (B, L, D)
+            kernel_out = kernel_out.view(B, -1, q)  # (B, L, q)
 
-            # Reshape to (B, D, H_out, W_out)
+            # Reshape to (B, q, H_out, W_out)
     
             output = kernel_out.transpose(1, 2).view(B, -1, H_out, W_out)
             outputs_by_channel.append(output)
-
-        return torch.cat(outputs_by_channel, dim=1) if C > 1 else output[:,0,:,:] # (B, C×D, H_out, W_out)
+        
+        if C > 1:
+            full_out_by_channel = torch.cat(outputs_by_channel, dim=1)  # (B, C * q, H_out, W_out)
+            full_out_by_channel = full_out_by_channel.view(B, C, q, H_out, W_out).permute(0, 2, 1, 3, 4).contiguous().view(B, q * C, H_out, W_out)
+            return full_out_by_channel
+        else:
+            return output[:,0,:,:] # (B, H_out, W_out)
     
 class QuantumConv1D(nn.Module):
     def __init__(self, window_size=3, stride=1, padding=0, channels_out = [4], graph= 'chain', entangle_method = 'CNOT', ancilla = 1, pad_filler = 'median'):

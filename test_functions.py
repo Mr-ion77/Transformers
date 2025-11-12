@@ -14,9 +14,9 @@ from TelegramBot import SendToTelegram
 p1 = {
     '1_learning_rate': 0.0025, '1_hidden_size': 48, '1_dropout': 0.225,
     '1_quantum' : False, '1_num_head': 4, '1_Attention_N' : 2, '1_num_transf': 2, '1_mlp_size': 5, '1_patch_size': 4, '1_weight_decay': 1e-7, '1_attention_selection': 'none', 
-    '1_selection_amount': 49, '1_RD': 1, '1_connectivity' : 'star' ,'1_entangle_method' : 'CRX', '1_special_cls' : False, '1_paralel': 1, '1_patience': -1, 
+    '1_selection_amount': 49, '1_RD': 1, '1_connectivity' : 'king' ,'1_entangle_method' : 'CRX', '1_special_cls' : False, '1_paralel': 1, '1_patience': -1, 
     '1_scheduler_factor': 0.985, '1_q_stride': 1, '1_ancilla' : 0, '1_channels_out' : [-1], '1_augmentation_prob' : 1, '1_val_train_pond' : 1,
-    '1_flatten_extra_channels' : False
+    '1_flatten_extra_channels' : False, '1_quanv_kernel_size' : 3
 }
 
 p2 = {
@@ -33,13 +33,14 @@ exp_config = {
     'num_experiments'       : 20,
     'num_classes'           : 7,
     'trained_selector_once' : False,
-    'experiment_name'       : 'Dropout and Channels Grid Search + Extra Channels as Extra Patches',
-    'experiment_id'         : '/final_stand/dropout_channels_extra_patches',
+    'experiment_name'       : 'Dropout and Channels Grid Search + Extra Channels as Extra Patches Kernel 3x3',
+    'experiment_id'         : '/final_stand/kernel_3x3/dropout_channels',
     'variant'               : 'selformer',
     'B'                     : 256,
     'N1'                    : 125,
     'N2'                    : 105,
     'q_config'              : {'none', 'patchwise'},
+    'dinamic_sel_amount'    : False,
     'device'                : torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 }
 
@@ -87,7 +88,7 @@ def make_directories_for_experiment(variant = 'selformer', exp_config = exp_conf
 def make_experiment_selformer(exp_config, p1_base, p2_base, all_iter={}, sel_iter={}, data_iter={}, class_iter={}, graph_columns = [ 'q_config', 'test_auc']):
     
     root_id = exp_config['experiment_id']
-    all_iter_counter = 1
+    all_iter_counter = 0
     columns = ['idx', 'q_config', 'channels_out', 'latent_shape'] + list(all_iter.keys()) + list(sel_iter.keys()) + list(data_iter.keys()) + list(class_iter.keys()) + default_columns
     # filepath: /home/carlosR/QTransformer/test_functions.py
     for pack_all in itertools.product(*all_iter.values()):
@@ -147,14 +148,13 @@ def make_experiment_selformer(exp_config, p1_base, p2_base, all_iter={}, sel_ite
 
                         current_params = dict(zip(sel_iter.keys(), pack_sel))
                         p1.update(current_params)
-                        current_params.update({'selection_amount' : p1['1_selection_amount'] // 2})
                         p2.update(current_params)
                         print("Current params for selector:", current_params)
 
                         if (not exp_config['trained_selector_once']) or exp_config['repeat_selector']:
                             exp_config['trained_selector_once'] = True
 
-                            print(f"\nTraining first model: Autoencoder\nOptiosn: Autoencoder with Quantum Layers: {list(exp_config['q_config'])} and Learning Rate: {p1['1_learning_rate']}\n")
+                            print(f"\nTraining first model: Selector\nOptiosn: Selector with Quantum Layers: {list(exp_config['q_config'])} and Learning Rate: {p1['1_learning_rate']}\n")
 
                             # Model
                             model1 = qpctorch.quantum.vit.VisionTransformer(
@@ -184,6 +184,8 @@ def make_experiment_selformer(exp_config, p1_base, p2_base, all_iter={}, sel_ite
                             current_params = dict(zip(data_iter.keys(), pack_data))
                             print("Current params for data:", current_params)
                             p1.update(current_params)
+                            if exp_config['dinamic_sel_amount']:
+                                current_params.update({'selection_amount' : (p1['1_selection_amount'] * len(p1["1_channels_out"])) // 2})
                             p2.update(current_params)
                                 
                             # Prepare datasets for the second step: get latent representations for each dataset and transform them into a new dataloader
@@ -192,10 +194,10 @@ def make_experiment_selformer(exp_config, p1_base, p2_base, all_iter={}, sel_ite
                                 NorLatentDatasetsTensors = []
                             if PatchBool:
                                 QuLatentDatasetsTensors = []
-                                padding = {'Up': 1, 'Down': 0, 'Left': 1, 'Right': 0}
+                                padding = {'Up': 1, 'Down': 0, 'Left': 1, 'Right': 0} if p1["1_quanv_kernel_size"] == 2 else 1
                                 print(f'Quantum Conv2D settings: Patch size: 2, Stride:1, \nPadding: {padding}, Connectivity: {p1["1_connectivity"]}, \nEntangle method: {p1["1_entangle_method"]}, Ancilla: {p1["1_ancilla"]}' )
                                 Quanvolution = qpctorch.quantum.quanvolution.QuantumConv2D(
-                                    patch_size=2, stride=1, padding=padding, channels_out = p1["1_channels_out"], graph = p1["1_connectivity"], entangle_method = p1['1_entangle_method'], ancilla = p1['1_ancilla'], pad_filler = 'median'
+                                    patch_size=p1["1_quanv_kernel_size"], stride=1, padding=padding, channels_out = p1["1_channels_out"], graph = p1["1_connectivity"], entangle_method = p1['1_entangle_method'], ancilla = p1['1_ancilla'], pad_filler = 'median'
                                     ).to(exp_config['device'])
 
 
@@ -332,10 +334,11 @@ def make_experiment_selformer(exp_config, p1_base, p2_base, all_iter={}, sel_ite
                 SendToTelegram(progress = progress, error_message=str(e))
                 print(str(e))
 
+king_measurers = [[4], [4, 5], [4, 5, 7], [4, 5, 7, 0], [4, 5, 7, 0, 8], [4, 5, 7, 0, 8], [4, 5, 7, 0, 8, 1], [4, 5, 7, 0, 8, 1, 3] , [4, 5, 7, 0, 8, 1, 3, 6], [4, 5, 7, 0, 8, 1, 3, 6, 2]]
 
-all_iter = {'1_selection_amount' : [49, 25, 20]}
-data_iter = { '1_channels_out' : [[3], [2, 3], [1,2,3], [0,1,2,3] ], '1_flatten_extra_channels':[False, True] }
-class_iter = {'dropout' : [ 0.225, 0.275, 0.325, 0.375, 0.425, 0.475, 0.525 ] }
-graph_columns = ['1_flatten_extra_channels', 'channels_out', 'dropout', 'test_auc']
+all_iter = {'1_selection_amount' : [25, 20]}
+data_iter = { '1_channels_out' : [ king_measurers[i] for i in [0, 2, 4, 6, 8] ], '1_flatten_extra_channels':[False, True] }
+class_iter = {'dropout' : [ 0.275, 0.375, 0.425, 0.475 ] }
+graph_columns = ['channels_out', 'dropout', 'test_auc']
 
 make_experiment_selformer(exp_config, p1, p2, all_iter = all_iter, data_iter= data_iter, class_iter= class_iter, graph_columns= graph_columns)

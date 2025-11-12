@@ -43,52 +43,250 @@ Quanvolution = QuantumConv2D(patch_size=p['patch_size'], stride=p['stride'], pad
 
 train, val, test, shape = Data.get_medmnist_dataloaders(pixel = 28, data_flag = 'dermamnist', batch_size=p['batch_size'], num_workers=4, pin_memory=True)
 
-def preprocess_and_save(B = p['batch_size'],DataLoaders = [train, val, test], quanv = Quanvolution, save_path = f"../QTransformer_Results_and_Datasets/transformer_results/current_results/quantum_datasets"):
 
-    QuantumDatasetsTensors = [] 
+import torch
+from pathlib import Path
+import json
+from tqdm import tqdm
+# Assuming 'device', 'p', 'train', 'val', 'test', 'Quanvolution', 'Data',
+# 'model1' (or a way to access it) are defined.
 
-    for i, dl in enumerate(DataLoaders):
-        all_quantums = []
-        all_labels = []
-        all_indices = []
+# --- Helper function to ensure 'quanv' is always a list ---
+def _normalize_to_list(item):
+    """Ensures the input item is a list."""
+    if isinstance(item, (list, tuple)):
+        return item
+    return [item]
 
-        for images, labels, indices in tqdm(dl, desc= f"Processing { ['train', 'validation', 'test'][i]} split: \n"):
-            images = images.to(device)
-            with torch.no_grad():
+# --- Helper function to save datasets ---
+def _save_dataset(dataset_tensors, save_path, suffix, split_name):
+    """Saves a single dataset tensor list to a file."""
+    try:
+        torch.save(dataset_tensors, save_path / f'quantum_{split_name}_dataset{suffix}.pt')
+    except Exception as e:
+        print(f"Warning: failed to save quantum_{split_name}_dataset{suffix}.pt: {e}")
 
-                B_img = images.shape[0]
-                quantum_imgs = quanv(images).cpu()
-                all_quantums.extend( quantum_imgs )          
-                all_labels.extend( labels )
+# --- Main optimized function ---
+def preprocess_and_save_optimized(
+    B = p['batch_size'],
+    DataLoaders = [train, val, test],
+    quanv = {'patchwise' : Quanvolution}, # Default is now a dict
+    save_path = f"../QTransformer_Results_and_Datasets/quantum_datasets", # Changed for local testing
+    mode = 'standard',  # 'standard' or 'by_selected_patches'
+    model1 = None,      # The model with .get_patches_by_attention
+    p1 = None,          # Dictionary with patch parameters (e.g., p['p1'])
+    num_channels = None, # Number of channels (e.g., p['num_channels'])
+    flatten_extra_channels = False,
+    p = None, 
+    device = device
+):
+    """
+    Preprocess datasets using one or more Quanvolution modules efficiently.
+    ... [rest of docstring] ...
 
+    Args:
+        ... [original args] ...
+        quanv (dict): Dictionary mapping names (str) to Quanvolution modules.
+                      Example: {'patchwise': Quanvolution(...)}
+        ...
+    """
 
-        all_labels = torch.tensor(all_labels)
-        all_quantums = torch.stack(all_quantums)
-        QuantumDatasetsTensors.append( list(zip(all_quantums ,all_labels))  )
+    # --- 1. Initialization ---
+    if not isinstance(quanv, dict):
+        raise TypeError(f"Expected 'quanv' to be a dictionary, but got {type(quanv)}")
         
-        Quantums = Data.create_dataloaders(data_dir = None, batch_size = B, channels_last = channels_last,
-                                        tensors = QuantumDatasetsTensors, transforms = {'train': None, 'val': None, 'test': None}
-                                        )
+    # NEW: Extract names and layers from the dictionary
+    quanv_names = list(quanv.keys())
+    quanv_list = list(quanv.values())
+    
+    num_quanv = len(quanv_list)
+    results = []
+    dl_names = ['train', 'validation', 'test']
 
-        # Use the provided save_path (default points to ../QTransformer_Results_and_Datasets/...)
-        save_path_quantum = Path(save_path)
-        save_path_quantum.mkdir(parents=True, exist_ok=True)
+    # Validation for new mode
+    if mode == 'by_selected_patches':
+        if not all([model1, p1, num_channels is not None]):
+            raise ValueError(
+                "For 'by_selected_patches' mode, you must provide "
+                "'model1', 'p1', and 'num_channels'."
+            )
+        print("Running in 'by_selected_patches' mode.")
+        # Print reshape config once for clarity
+        print(f"Reshape config: Flatten extra channels? {p1.get('1_flatten_extra_channels', 'N/A')}")
+    else:
+        print("Running in 'standard' mode.")
 
-        # Save hyperparameters dictionary `p` alongside the quantum dataset tensors
-        try:
+    all_quantum_datasets_tensors = [[] for _ in range(num_quanv)]
+    last_processed_shapes = [None] * num_quanv
+
+    # --- 2. Setup Save Directory & Hyperparameters ---
+    save_path_quantum = Path(save_path)
+    save_path_quantum.mkdir(parents=True, exist_ok=True)
+
+    try:
+        if p: # Only save if 'p' is provided
             with open(save_path_quantum / 'hyperparameters.json', 'w') as hf:
-                json.dump(p, hf, indent=2)
+                json.dump(p, hf, indent=2) 
+    except Exception as e:
+        print(f"Warning: failed to save hyperparameters.json: {e}")
+
+    # --- 3. Single Pass Data Processing ---
+    for i, dl in enumerate(DataLoaders):
+        dl_name = dl_names[i] if i < len(dl_names) else f"split_{i}"
+        temp_data_batches = [[] for _ in range(num_quanv)]
+        
+        if dl is None: # Handle mock dataloaders being None
+            print(f"Skipping {dl_name} as dataloader is None.")
+            # Still need to append empty lists for shape consistency
+            for q_idx in range(num_quanv):
+                all_quantum_datasets_tensors[q_idx].append([])
+            continue
+
+        for images, labels, indices in tqdm(dl, desc=f"Processing {dl_name} split"):
+            images = images.to(device)
+            B_img = images.shape[0] # Batch size for this iteration
+            
+            with torch.no_grad():
+                
+                # Loop over each quanvolution layer
+                for q_idx, qlayer in enumerate(quanv_list):
+                    
+                    # --- THIS IS THE MODIFIED BLOCK ---
+                    if mode == 'standard':
+                        # Original behavior
+                        processed_data = qlayer(images).cpu()
+
+                    elif mode == 'by_selected_patches':
+
+                        # 1. Get patches from model1
+                        selected_patches = model1.get_patches_by_attention(x=images, paralel_branch=0)[0]
+                        # selected_patches shape: (B_img, 1_selection_amount, C, patch_size, patch_size)
+
+                        # 2. Reshape patches to fit quanvolution input
+                        aux_patches = selected_patches.view(
+                            -1, 
+                            num_channels, 
+                            p1['1_patch_size'], 
+                            p1['1_patch_size']
+                        )  # Shape: (B * num_patches, C, patch_size, patch_size)
+
+                        # 3. Apply the current quanvolution layer
+                        aux_patch_outs = qlayer(aux_patches)
+                        # Shape: (B * num_patches, C * q, H_out, W_out) # C_out = C * (number of qubits measured = q)
+                        measured_qubits = aux_patch_outs.shape[-3] // num_channels # q = (C * q) /c, in theory haha
+
+                        if hasattr(qlayer, 'channels_out'):
+                            # Check that the number of output channels matches the number of measured qubits
+                            assert len(qlayer.channels_out) == measured_qubits, \
+                                f"The number of output channels ({len(qlayer.channels_out)}) must equal the number of measured qubits ({measured_qubits})."
+                        else:
+                            # Assume 1 measured qubit if channels_out attribute doesn't exist
+                            assert 1 == measured_qubits, f"The number of output channels (1) must equal the number of measured qubits ({measured_qubits})."
+
+                        # 4. Determine reshape dimensions
+                        assert aux_patch_outs.shape[2] * aux_patch_outs.shape[3] == p1['1_patch_size']**2, \
+                                f"An internal shape mismatch error happened during the layer: {qlayer}:\n( { aux_patch_outs.shape[2] * aux_patch_outs.shape[3]}) must equal the number the square of the patchsize ({p1['1_patch_size']**2})."
+                        
+                        if flatten_extra_channels:
+
+                            shape_to_reshape_toQ = (
+                                B_img, 
+                                p1['1_selection_amount'], 
+                                num_channels * measured_qubits * p1['1_patch_size']**2
+                            )
+                        else:
+                            shape_to_reshape_toQ = (
+                                B_img,
+                                p1['1_selection_amount'] * measured_qubits,
+                                num_channels * p1['1_patch_size']**2
+                            )
+                            
+
+                        processed_data = aux_patch_outs.view(shape_to_reshape_toQ).cpu()
+
+                    else:
+                        raise ValueError(f"Unknown mode: {mode}")
+
+                    # Store the shape for later (shape of a single item, post-batch)
+                    if processed_data.nelement() > 0:
+                        last_processed_shapes[q_idx] = processed_data.shape[1:]
+
+                    # Append (data_batch, label_batch)
+                    temp_data_batches[q_idx].append((processed_data, labels.cpu()))
+                    
+                    # Print shapes for the *first batch* of the *first split*
+                    if i == 0 and all(len(b) == 1 for b in temp_data_batches): # if first batch
+                        if mode == 'by_selected_patches':
+                            print(f"\n--- Debug Shapes (q_idx: {q_idx}, name: {quanv_names[q_idx]}, split: {dl_name}, batch 0) ---")
+                            print(f"Shape out of q-convolution (aux_patch_outs): {aux_patch_outs.shape}")
+                            print(f"Shape after reshape (processed_data batch): {processed_data.shape}")
+                            print(f"Stored item shape (last_processed_shapes): {processed_data.shape[1:]}")
+                            print(f"--------------------------------------------------")
+                        else: # Standard mode
+                            print(f"\n--- Debug Shapes (q_idx: {q_idx}, name: {quanv_names[q_idx]}, split: {dl_name}, batch 0) ---")
+                            print(f"Shape after q-convolution (processed_data batch): {processed_data.shape}")
+                            print(f"Stored item shape (last_processed_shapes): {processed_data.shape[1:]}")
+                            print(f"--------------------------------------------------")
+                            
+        # --- 4. Consolidate Batches ---
+
+        for q_idx in range(num_quanv):
+            if not temp_data_batches[q_idx]:
+                print(f"Warning: No data processed for {dl_name}, quanv {quanv_names[q_idx]} (idx {q_idx}).")
+                all_quantum_datasets_tensors[q_idx].append([])
+                continue
+
+            all_quantums_split = torch.cat([data[0] for data in temp_data_batches[q_idx]], dim=0)
+            all_labels_split = torch.cat([data[1] for data in temp_data_batches[q_idx]], dim=0)
+
+            dataset_tensor_list = list(zip(all_quantums_split, all_labels_split))
+            all_quantum_datasets_tensors[q_idx].append(dataset_tensor_list)
+
+    # --- 5. Create DataLoaders and Save Datasets ---
+
+    for q_idx in range(num_quanv):
+
+        dataset_name_suffix = quanv_names[q_idx] 
+        current_quanv_tensors = all_quantum_datasets_tensors[q_idx]
+
+        if not current_quanv_tensors or not any(split for split in current_quanv_tensors):
+            print(f"Warning: No data found for quanv '{dataset_name_suffix}' (idx {q_idx}). Skipping.")
+            results.append(None)
+            continue
+
+        # Build dataloaders
+        Quantums = Data.create_dataloaders(
+            data_dir=None,
+            batch_size=B,
+            channels_last=p.get('channels_last', False) if p else False,
+            tensors=current_quanv_tensors,
+            transforms={'train': None, 'val': None, 'test': None}
+        )
+
+        # Save the datasets using the new suffix
+        # Ensure that the number of splits matches the save calls
+        num_splits = len(current_quanv_tensors)
+        _save_dataset(current_quanv_tensors[0], save_path_quantum, dataset_name_suffix, 'train')
+        if num_splits > 1:
+            _save_dataset(current_quanv_tensors[1], save_path_quantum, dataset_name_suffix, 'val')
+        if num_splits > 2:
+            _save_dataset(current_quanv_tensors[2], save_path_quantum, dataset_name_suffix, 'test')
+        # Add more if you have more splits
+        if num_splits > 3: 
+            for i in range(3, num_splits):
+                 _save_dataset(current_quanv_tensors[i], save_path_quantum, dataset_name_suffix, f'split_{i}')
+
+
+        # Record shape information
+        try:
+            # Append shape info to the list of dataloaders
+            Quantums.append(last_processed_shapes[q_idx])
         except Exception as e:
-            print(f"Warning: failed to save hyperparameters.json: {e}")
+            print(f"Warning: Failed to append shape info for '{dataset_name_suffix}': {e}")
+        
+        results.append(Quantums)
 
-        torch.save(QuantumDatasetsTensors[0], save_path_quantum / 'quantum_train_dataset.pt')
-        torch.save(QuantumDatasetsTensors[1], save_path_quantum / 'quantum_val_dataset.pt')
-        torch.save(QuantumDatasetsTensors[2], save_path_quantum / 'quantum_test_dataset.pt')
-
-        Quantums.append( quantum_imgs.shape[1:] )
-
-
-    return Quantums
+    return results
         
 
 if __name__ == 'main':
