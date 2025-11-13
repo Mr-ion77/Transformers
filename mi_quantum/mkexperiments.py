@@ -1,52 +1,270 @@
-import torch
-import mi_quantum as qpctorch
-import pandas as pd
+# --- This MUST be at the top ---
+import sys, os
 from pathlib import Path
-import itertools
-from mi_quantum.quantum.quanvolution import QuantumConv2D
+
+# Path to the script itself
+script_path = Path(__file__).resolve()
+
+# Path to .../QTransformer
+project_dir = script_path.parent.parent
+# Path to .../home/carlosR
+base_dir = project_dir.parent
+
+# Add BOTH directories to sys.path
+sys.path.append(str(project_dir))  # Adds /home/carlosR/QTransformer
+sys.path.append(str(base_dir))     # Adds /home/carlosR
+
+import torch, itertools
+import json
+import pandas as pd
+import mi_quantum.quantum as quantum  
+import mi_quantum.data as data
 from mi_quantum.data_to_qdata import preprocess_and_save
-import matplotlib.pyplot as plt
-import os, sys, json
-from tqdm import tqdm
-sys.path.append(str(Path(__file__).resolve().parent.parent))
+import mi_quantum.training as training
+# ... other imports ...
 from TelegramBot import SendToTelegram
 
-# Hyperparams
-p1 = {
-    '1_learning_rate': 0.0025, '1_hidden_size': 48, '1_dropout': 0.225,
-    '1_quantum' : False, '1_num_head': 4, '1_Attention_N' : 2, '1_num_transf': 2, '1_mlp_size': 5, '1_patch_size': 4, '1_weight_decay': 1e-7, '1_attention_selection': 'none', 
-    '1_selection_amount': 49, '1_RD': 1, '1_connectivity' : 'star' ,'1_entangle_method' : 'CRX', '1_special_cls' : False, '1_paralel': 1, '1_patience': -1, 
-    '1_scheduler_factor': 0.985, '1_q_stride': 1, '1_ancilla' : 0, '1_channels_out' : [-1],'1_augmentation_prob' : 1, '1_val_train_pond' : 1,
-    '1_flatten_extra_channels' : False, '1_quanv_kernel_size' : 2
-}
 
-p2 = {
-    'learning_rate': 0.0025, 'hidden_size': 48, 'dropout': 0.3,
-    'quantum' : False, 'num_head': 4, 'Attention_N' : 2, 'num_transf': 2, 'mlp_size': 5, 'patch_size': 4, 'weight_decay': 1e-7, 'attention_selection': 'filter',
-    'selection_amount': 20, 'RD': 1, 'special_cls' : False, 'paralel': 2, 'patience': -1, 'scheduler_factor': 0.975, 'q_stride': 1, 'augmentation_prob' : 0,
-    'val_train_pond' : 0.5, 'len_channels_scaler' : 3
-}
+# --- Global Constants ---
+DEFAULT_COLUMNS = [
+    'test_auc', 'test_acc', 'val_auc', 'val_acc', 'train_auc', 'train_acc', '#params'
+]
 
-exp_config = {
-    'channels_last'         : False,         # True if last dimension of datasets tensors match channels dimension
-    'repeat_selector'       : False,         # True to train autoencoder each time for more variability
-    'send_telegram'         : True,
-    'num_experiments'       : 20,
-    'num_classes'           : 7,
-    'trained_selector_once' : False,
-    'experiment_name'       : 'Dropout and Channels Grid Search + Extra Channels as Extra Patches Kernel 3x3',
-    'experiment_id'         : '../QTransformer_Results_and_Datasets/final_stand/3x3/dropout_channels/extra_patches/dinamic_sel_amount/',#'/final_stand/kernel_3x3/dropout_channels',
-    'variant'               : 'selformer',
-    'B'                     : 256,
-    'N1'                    : 125,
-    'N2'                    : 105,
-    'q_config'              : {'none', 'patchwise'},
-    'device'                : torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-}
+# --- Core Helper Functions (from your original script) ---
 
-default_columns = [
-        'test_auc_sel', 'test_acc_sel', '#params_sel' , 'test_auc', 'test_acc', 'val_auc', 'val_acc', 'train_auc', 'train_acc', '#params_class'
-    ]
+def make_dropout(drop):
+    return {'embedding_attn': drop, 'after_attn': drop, 'feedforward': drop, 'embedding_pos': drop}
+
+def custom_update_dict(original, updates):
+    for key, value in updates.items():
+        if key in original and isinstance(original[key], dict) and isinstance(value, dict):
+            custom_update_dict(original[key], value)
+        else:
+            original[key] = value
+
+def make_directories_for_experiment(variant = 'selformer', exp_config = None, p1 = None, p2 = None , all_iter = None,
+                                    m1_iter = None, data_iter = None, m2_iter = None, columns = DEFAULT_COLUMNS):
+    # This function is kept as-is from your script, but 'exp_config' needs a default
+    if exp_config is None:
+        raise ValueError("exp_config cannot be None")
+        
+    base_dir = f"../QTransformer_Results_and_Datasets/{variant}_results"
+    exp_dir = os.path.join(base_dir, exp_config['experiment_id'])
+    
+    os.makedirs(os.path.join(base_dir, 'current_results'), exist_ok=True)
+    try:
+        os.makedirs(exp_dir, exist_ok=False)
+    except FileExistsError as e:
+        print(f"Warning: {e}")
+        print(f"Directory for experiment ID '{exp_config['experiment_id']}' already exists. Results may be overwritten.")
+
+    # Save hyperparameters
+    with open(os.path.join(exp_dir, 'hyperparameters.json'), 'w') as f:
+        f.write(f"Experiment Name: {exp_config['experiment_name']}\nBatch Size: {exp_config['B']}\n")
+        if p1:
+             f.write(f"Number of Epochs Selector: {exp_config.get('N1', 'N/A')}\n")
+             f.write('\nHyperparameters for Selector\n')
+             json.dump(p1, f, indent=4)
+        if p2:
+             f.write(f"Number of Epochs Classifier: {exp_config.get('N2', 'N/A')}\n")
+             f.write('\nHyperparameters for Classifier\n')
+             json.dump(p2, f, indent=4)
+        
+        # Handle iter blocks
+        iter_blocks = [
+            ('All iter', all_iter), ('Model 1 iter', m1_iter),
+            ('Data iter', data_iter), ('Model 2 iter', m2_iter)
+        ]
+        for header, block in iter_blocks:
+            if block:
+                f.write(f'\n{header}\n')
+                json.dump(block, f, indent=4)
+
+    csv_path = os.path.join(exp_dir, 'results_grid_search.csv')
+    if not os.path.exists(csv_path):
+        pd.DataFrame(columns=columns).to_csv(csv_path, mode='a', header=True, index=False)
+
+    return csv_path, exp_dir
+
+
+def iterate_all_iter(root_id, base_exp_config, all_iter, p_bases):
+    """
+    A generator that handles the 'all_iter' loop logic.
+    Yields: (current_exp_config, current_p_bases, current_params_all, all_iter_counter)
+    """
+    for all_iter_counter, pack_all in enumerate(itertools.product(*all_iter.values())):
+        
+        experiment_id = root_id
+        if all_iter:
+            experiment_id += '/all_iter_' + str(all_iter_counter) + '/'
+        
+        current_exp_config = base_exp_config.copy()
+        current_exp_config['experiment_id'] = experiment_id
+        
+        current_p_bases = [p.copy() for p in p_bases]
+        current_params_all = dict(zip(all_iter.keys(), pack_all))
+        
+        custom_update_dict(current_exp_config, current_params_all)
+        for p in current_p_bases:
+            custom_update_dict(p, current_params_all)
+            
+        print("---" * 10)
+        print(f"Current overall params (all_iter {all_iter_counter}):", current_params_all)
+        print("---" * 10)
+
+        yield current_exp_config, current_p_bases, current_params_all, all_iter_counter
+
+def load_data(data_flag='dermamnist', pixel=28, batch_size=32, **kwargs):
+    """ Loads and returns the MedMNIST dataloaders. """
+    print(f"Loading {data_flag} data with batch size {batch_size}...")
+    
+    loader_args = {
+        'pixel': pixel, 'data_flag': data_flag, 'batch_size': batch_size,
+        'num_workers': kwargs.get('num_workers', 4),
+        'pin_memory': kwargs.get('pin_memory', True),
+    }
+    
+    if kwargs.get('extra_tr_without_trans', False):
+        loader_args['extra_tr_without_trans'] = True
+        return data.get_medmnist_dataloaders(**loader_args) # (notrans_train, train, val, test, shape)
+    else:
+        return data.get_medmnist_dataloaders(**loader_args) # (train, val, test, shape)
+
+def send_telegram_report(exp_config, csv_path=None, columns=None, title=None, error=None, progress=None):
+    """Handles sending Telegram messages for progress, errors, or final reports."""
+    if not exp_config.get('send_telegram', False):
+        return
+
+    try:
+        if error:
+            print(f"Sending error to Telegram: {error}")
+            SendToTelegram(progress=progress, error_message=str(error))
+        elif csv_path: # Final report
+            print("Sending final report to Telegram...")
+            SendToTelegram(csv_file=csv_path, columns=columns, title=title)
+        elif progress is not None: # Progress update
+             # Only print/send on specific milestones to avoid spam
+             if progress in [0, 25, 50, 75, 100]: 
+                print(f"Sending progress update: {progress}%")
+                SendToTelegram(progress=progress)
+    except Exception as e:
+        print(f"Failed to send message to Telegram: {e}")
+
+def log_experiment_row(csv_path, row_data, column_order):
+    """ Appends a single row of experiment results to the CSV file. """
+    df = pd.DataFrame([row_data], columns=column_order)
+    df.to_csv(csv_path, mode='a', header=False, index=False)
+
+
+def make_experiment_transformer(exp_config, p_base, all_iter={}, model_iter={}, graph_columns=['attention_selection', 'test_auc']):
+    
+    root_id = exp_config['experiment_id']
+    
+    # Define columns for CSV logging
+    columns = ['idx', 'all_iter_idx'] + list(all_iter.keys()) + list(model_iter.keys()) + DEFAULT_COLUMNS
+
+    progress = 0
+    
+    # --- Use the 'all_iter' generator ---
+    for current_exp_config, (p,), current_params_all, all_iter_counter in iterate_all_iter(
+        root_id, exp_config, all_iter, [p_base]
+    ):
+        
+        csv_path, save_path = None, None # Init for error handling
+        
+        try:
+            # --- Create directories and CSV file ---
+            csv_path, save_path = make_directories_for_experiment(
+                variant='transformer', # Specify variant
+                exp_config=current_exp_config, 
+                p1=p, # Use p1 slot for the single param dict
+                all_iter=all_iter, 
+                m2_iter=model_iter, # m2_iter for consistency, as it's the "model" iter
+                columns=columns
+            )
+
+            # --- Load data ---
+            train_dl, val_dl, test_dl, shape = load_data(
+                data_flag='dermamnist',
+                pixel=28,
+                batch_size=current_exp_config['B'],
+                num_workers=4,
+                pin_memory=True
+            )
+            
+            num_channels = shape[-1] if current_exp_config['channels_last'] else shape[0]
+            
+            # Send initial progress
+            send_telegram_report(current_exp_config, progress=0)   
+
+            # --- Experiment Repetition Loop ---
+            for idx in range(current_exp_config['num_experiments']):
+                progress = int( 100 * (idx + 1) // current_exp_config['num_experiments'] )
+                # Send progress update (helper handles filtering)
+                send_telegram_report(current_exp_config, progress=progress)
+                
+                print(f"\n===== Experiment Run {idx + 1} / {current_exp_config['num_experiments']} =====")
+
+                # --- Innermost Loop (model_iter) ---
+                for pack_model in itertools.product(*model_iter.values()):
+                    
+                    # Apply updates from model_iter
+                    current_params_model = dict(zip(model_iter.keys(), pack_model))
+                    custom_update_dict(p, current_params_model)
+                    print(f"\nCurrent params for model:", current_params_model)
+
+                    aux_save_path = Path(f"../QTransformer_Results_and_Datasets/transformer_results/current_results/grid_search{idx}")
+                    aux_save_path.mkdir(parents=True, exist_ok=True)
+                    
+                    # --- Model Definition ---
+                    model = quantum.vit.VisionTransformer(
+                        img_size=shape[-1], num_channels=shape[0], num_classes=current_exp_config['num_classes'],
+                        patch_size=p['patch_size'], hidden_size= shape[0]* p['patch_size']**2, num_heads=p['num_head'], Attention_N = p['Attention_N'],
+                        num_transformer_blocks=p['num_transf'], attention_selection= p['attention_selection'], selection_amount= p['selection_amount'], special_cls = p['special_cls'], 
+                        mlp_hidden_size=p['mlp_size'], quantum_mlp = p['quantum'], dropout = make_dropout(p['dropout']), channels_last=current_exp_config['channels_last'], quantum_classification = False,
+                        paralel = p['paralel'], RD = p['RD'], q_stride = p['q_stride'], connectivity = p['connectivity']
+                    )
+
+                    # --- Model Training ---
+                    print(f"Training model with attention_selection: {p['attention_selection']}")
+                    test_auc, test_acc, val_auc, val_acc, train_auc, train_acc, params = training.train_and_evaluate(
+                        model, train_dl, val_dl, test_dl, num_classes=current_exp_config['num_classes'],
+                        learning_rate=p['learning_rate'], num_epochs=current_exp_config['N'], device=current_exp_config['device'], mapping=False,
+                        res_folder=str(aux_save_path), hidden_size=p['hidden_size'], dropout=make_dropout(p['dropout']),
+                        num_heads=p['num_head'], patch_size=p['patch_size'], num_transf=p['num_transf'],
+                        mlp=p['mlp_size'], wd=p['weight_decay'], patience= p['patience'], scheduler_factor=p['scheduler_factor'], autoencoder=False
+                    )
+
+                    print(f"\nPoint {idx+1} finished training. AUC: {test_auc:.5f}\n")
+
+                    # --- Save Results (using new helper) ---
+                    row = {
+                        'idx': idx + 1, 'all_iter_idx': all_iter_counter,
+                        'test_auc': test_auc, 'test_acc': test_acc, 'val_auc': val_auc, 
+                        'val_acc': val_acc, 'train_auc': train_auc, 'train_acc': train_acc,
+                        '#params': params,
+                        **p # Add all current hyperparameters
+                    }
+                    print("Logging results:", row)
+                    log_experiment_row(csv_path, row, columns)
+
+            # --- Send final report (using new helper) ---
+            send_telegram_report(
+                current_exp_config, 
+                csv_path=csv_path, 
+                columns=graph_columns,
+                title=f"{current_exp_config['experiment_name']} (all_iter {all_iter_counter})"
+            )
+
+        except Exception as e:
+             # --- Send error report (using new helper) ---
+             send_telegram_report(current_exp_config, error=e, progress=progress)
+             print(f"Error encountered in all_iter {all_iter_counter}: {e}")
+             # Continue to the next 'all_iter' loop if possible
+             continue
+
+
+
 
 
 def make_experiment_selformer(exp_config, p1_base, p2_base, all_iter={}, m1_iter={}, data_iter={}, m2_iter={}, graph_columns = [ 'q_config', 'test_auc']):
@@ -66,7 +284,7 @@ def make_experiment_selformer(exp_config, p1_base, p2_base, all_iter={}, m1_iter
     
     root_id = exp_config['experiment_id']
     all_iter_counter = 0
-    columns = ['idx', 'q_config', 'channels_out', 'latent_shape', '2_selection_amount'] + list(all_iter.keys()) + list(m1_iter.keys()) + list(data_iter.keys()) + list(m2_iter.keys()) + default_columns
+    columns = ['idx', 'q_config', 'channels_out', 'latent_shape', '2_selection_amount'] + list(all_iter.keys()) + list(m1_iter.keys()) + list(data_iter.keys()) + list(m2_iter.keys()) + DEFAULT_COLUMNS
     # filepath: /home/carlosR/QTransformer/test_functions.py
     for pack_all in itertools.product(*all_iter.values()):
 
@@ -92,9 +310,8 @@ def make_experiment_selformer(exp_config, p1_base, p2_base, all_iter={}, m1_iter
             progress = 0
             csv_path = make_directories_for_experiment( variant='selformer', exp_config = exp_config, p1 = p1, p2 = p2, 
                                                         all_iter = all_iter, m1_iter = m1_iter, data_iter = data_iter, m2_iter =m2_iter, columns = columns )
-
             # Load data
-            notrans_train_dl, train_dl, val_dl, test_dl, shape = qpctorch.data.get_medmnist_dataloaders(
+            notrans_train_dl, train_dl, val_dl, test_dl, shape = data.get_medmnist_dataloaders(
                 pixel=28, data_flag='dermamnist', extra_tr_without_trans = True, batch_size=exp_config['B'], num_workers=4, pin_memory=True
             )
 
@@ -135,7 +352,7 @@ def make_experiment_selformer(exp_config, p1_base, p2_base, all_iter={}, m1_iter
                         print(f"\nTraining first model: Selector\nOptiosn: Selector with Quantum Layers: {list(exp_config['q_config'])} and Learning Rate: {p1['1_learning_rate']}\n")
 
                         # Model
-                        model1 = qpctorch.quantum.vit.VisionTransformer(
+                        model1 = quantum.vit.VisionTransformer(
                             img_size=shape[-1], num_channels=shape[0], num_classes=exp_config['num_classes'],
                             patch_size=p1['1_patch_size'], hidden_size= shape[0]* p1['1_patch_size']**2, num_heads=p1['1_num_head'], Attention_N = p1['1_Attention_N'],
                             num_transformer_blocks=p1['1_num_transf'], attention_selection= p1['1_attention_selection'], selection_amount = p1['1_selection_amount'], special_cls = p1['1_special_cls'], 
@@ -144,7 +361,7 @@ def make_experiment_selformer(exp_config, p1_base, p2_base, all_iter={}, m1_iter
                         )
 
                         # Train first model
-                        test_auc_sel, test_acc_sel, val_auc_sel, val_acc_sel, train_auc_sel, _, params_sel = qpctorch.training.train_and_evaluate(
+                        test_auc_sel, test_acc_sel, val_auc_sel, val_acc_sel, train_auc_sel, _, params_sel = training.train_and_evaluate(
                             model1, train_dl, val_dl, test_dl, num_classes=exp_config['num_classes'],
                             learning_rate=p1['1_learning_rate'], num_epochs=exp_config['N1'], device=exp_config['device'], mapping=False,
                             res_folder=str(save_path), hidden_size=p1['1_hidden_size'], dropout= make_dropout( p1['1_dropout']),
@@ -170,7 +387,7 @@ def make_experiment_selformer(exp_config, p1_base, p2_base, all_iter={}, m1_iter
                         paddings = { 2 : { 'Up': 1, 'Down': 0, 'Left': 1, 'Right': 0 }, 3 : { 'Up': 1, 'Down': 1, 'Left': 1, 'Right': 1 } }
 
                         Kernels = { 'none' :        torch.nn.Identity(),
-                                    'patchwise' :   QuantumConv2D(
+                                    'patchwise' :   quantum.quanvolution.QuantumConv2D(
                                                         kernel_size = p1['1_quanv_kernel_size'],
                                                         stride = 1,
                                                         padding = paddings[p1['1_quanv_kernel_size']],
@@ -216,7 +433,7 @@ def make_experiment_selformer(exp_config, p1_base, p2_base, all_iter={}, m1_iter
                                 shape2 = config_dataset[-1]  # Shape of one sample in the test set
                                 print("Shape2:", shape2)
 
-                                model2 = qpctorch.quantum.vit.VisionTransformer(
+                                model2 = quantum.vit.VisionTransformer(
                                     img_size=shape[-1], num_channels= 3, num_classes=exp_config['num_classes'],
                                     patch_size=p2['patch_size'], hidden_size= shape2[-1], num_heads=p2['num_head'], Attention_N = p2['Attention_N'],
                                     num_transformer_blocks=p2['num_transf'], attention_selection= p2['attention_selection'], special_cls = p2['special_cls'], 
@@ -228,7 +445,7 @@ def make_experiment_selformer(exp_config, p1_base, p2_base, all_iter={}, m1_iter
                                 print(f'QUANTUM SETTING IS: {config} and current lr is: {p2["learning_rate"]}')
                                 
                                 # Train second model
-                                test_auc, test_acc, val_auc, val_acc, train_auc, train_acc, params = qpctorch.training.train_and_evaluate(
+                                test_auc, test_acc, val_auc, val_acc, train_auc, train_acc, params = training.train_and_evaluate(
                                     model2, config_dataset[0], config_dataset[1], config_dataset[2], num_classes=exp_config['num_classes'],
                                     learning_rate=p2['learning_rate'], num_epochs=exp_config['N2'], device=exp_config['device'], mapping=False,
                                     res_folder=str(save_path), hidden_size=p2['hidden_size'], dropout=make_dropout(p2['dropout']),
@@ -263,13 +480,3 @@ def make_experiment_selformer(exp_config, p1_base, p2_base, all_iter={}, m1_iter
         except Exception as e:
             SendToTelegram(progress = progress, error_message=str(e))
             print(str(e))
-
-king_measurers = [[4], [4, 5], [4, 5, 7], [4, 5, 7, 0], [4, 5, 7, 0, 8], [4, 5, 7, 0, 8], [4, 5, 7, 0, 8, 1], [4, 5, 7, 0, 8, 1, 3] , [4, 5, 7, 0, 8, 1, 3, 6], [4, 5, 7, 0, 8, 1, 3, 6, 2]]
-
-all_iter = {'1_selection_amount' : [20] }
-#data_iter = { '1_channels_out' : [ king_measurers[i] for i in [0, 2, 4, 6, 8] ], '1_flatten_extra_channels':[False, True] }
-data_iter = { '1_channels_out' : [ [3] , [3, 2], [3, 2, 1], [3, 2, 1, 0] ], '1_flatten_extra_channels':[False, True] }
-m2_iter = {'dropout' : [0.3], 'len_channels_scaler': [0, 1, 2, 3, 4] } # [ 0.275, 0.375, 0.425, 0.475 ]
-graph_columns = ['len_channels_scaler', 'channels_out', 'test_auc']
-
-make_experiment_selformer(exp_config, p1, p2, all_iter = all_iter, data_iter = data_iter, m2_iter= m2_iter, graph_columns = graph_columns)

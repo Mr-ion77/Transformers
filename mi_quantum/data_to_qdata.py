@@ -2,6 +2,7 @@ import torch
 from mi_quantum.quantum.pennylane_backend import QuantumLayer
 from mi_quantum import data as Data
 from mi_quantum.quantum.quanvolution import QuantumKernel, QuantumConv2D
+
 import os
 import numpy as np
 from tqdm import tqdm
@@ -21,7 +22,7 @@ graphs = {'king_2_ancilla': [[0, 2], [2, 8], [8, 6], [6, 0], [1, 5], [5, 7], [7,
 
 p = {
     'num_qubits': 9,
-    'ancilla' : 1,
+    'ancilla' : 0,
     'entangle': True,
     'trainBool': False,
     'connectivity': graphs['king'],
@@ -38,20 +39,7 @@ p = {
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
 
-Quanvolution = QuantumConv2D(patch_size=p['patch_size'], stride=p['stride'], padding=p['padding'], channels_last = p['channels_last'],
-                             graph = p['connectivity'], channels_out= [4], ancilla = p['ancilla'], pad_filler= p['pad_filler']).to(device)
-
-train, val, test, shape = Data.get_medmnist_dataloaders(pixel = 28, data_flag = 'dermamnist', batch_size=p['batch_size'], num_workers=4, pin_memory=True)
-
-
-import torch
-from pathlib import Path
-import json
-from tqdm import tqdm
-# Assuming 'device', 'p', 'train', 'val', 'test', 'Quanvolution', 'Data',
-# 'model1' (or a way to access it) are defined.
-
-# --- Helper function to ensure 'quanv' is always a list ---
+# --- Helper function to ensure 'kernels' is always a list ---
 def _normalize_to_list(item):
     """Ensures the input item is a list."""
     if isinstance(item, (list, tuple)):
@@ -67,15 +55,15 @@ def _save_dataset(dataset_tensors, save_path, suffix, split_name):
         print(f"Warning: failed to save quantum_{split_name}_dataset{suffix}.pt: {e}")
 
 # --- Main optimized function ---
-def preprocess_and_save_optimized(
+def preprocess_and_save(
     B = p['batch_size'],
-    DataLoaders = [train, val, test],
-    quanv = {'patchwise' : Quanvolution}, # Default is now a dict
-    save_path = f"../QTransformer_Results_and_Datasets/quantum_datasets", # Changed for local testing
+    DataLoaders = [None, None, None], # [train, val, test]
+    kernels = {'none' : torch.nn.Identity()}, 
+    save_path = f"../QTransformer_Results_and_Datasets/quantum_datasets",
     mode = 'standard',  # 'standard' or 'by_selected_patches'
     model1 = None,      # The model with .get_patches_by_attention
     p1 = None,          # Dictionary with patch parameters (e.g., p['p1'])
-    num_channels = None, # Number of channels (e.g., p['num_channels'])
+    num_channels = None, 
     flatten_extra_channels = False,
     p = None, 
     device = device
@@ -86,21 +74,24 @@ def preprocess_and_save_optimized(
 
     Args:
         ... [original args] ...
-        quanv (dict): Dictionary mapping names (str) to Quanvolution modules.
+        kernels (dict): Dictionary mapping names (str) to Quanvolution modules.
                       Example: {'patchwise': Quanvolution(...)}
         ...
     """
 
     # --- 1. Initialization ---
-    if not isinstance(quanv, dict):
-        raise TypeError(f"Expected 'quanv' to be a dictionary, but got {type(quanv)}")
+    if not isinstance(kernels, dict):
+        raise TypeError(f"Expected 'kernels' to be a dictionary, but got {type(kernels)}")
         
     # NEW: Extract names and layers from the dictionary
-    quanv_names = list(quanv.keys())
-    quanv_list = list(quanv.values())
+    kernels_names = list(kernels.keys())
+    kernels_list = list(kernels.values())
     
-    num_quanv = len(quanv_list)
-    results = []
+    num_kernels = len(kernels_list)
+    
+    # MODIFICATION: Initialize results as a dictionary
+    results = {}
+    
     dl_names = ['train', 'validation', 'test']
 
     # Validation for new mode
@@ -116,8 +107,8 @@ def preprocess_and_save_optimized(
     else:
         print("Running in 'standard' mode.")
 
-    all_quantum_datasets_tensors = [[] for _ in range(num_quanv)]
-    last_processed_shapes = [None] * num_quanv
+    all_quantum_datasets_tensors = [[] for _ in range(num_kernels)]
+    last_processed_shapes = [None] * num_kernels
 
     # --- 2. Setup Save Directory & Hyperparameters ---
     save_path_quantum = Path(save_path)
@@ -133,12 +124,12 @@ def preprocess_and_save_optimized(
     # --- 3. Single Pass Data Processing ---
     for i, dl in enumerate(DataLoaders):
         dl_name = dl_names[i] if i < len(dl_names) else f"split_{i}"
-        temp_data_batches = [[] for _ in range(num_quanv)]
+        temp_data_batches = [[] for _ in range(num_kernels)]
         
         if dl is None: # Handle mock dataloaders being None
             print(f"Skipping {dl_name} as dataloader is None.")
             # Still need to append empty lists for shape consistency
-            for q_idx in range(num_quanv):
+            for q_idx in range(num_kernels):
                 all_quantum_datasets_tensors[q_idx].append([])
             continue
 
@@ -148,8 +139,8 @@ def preprocess_and_save_optimized(
             
             with torch.no_grad():
                 
-                # Loop over each quanvolution layer
-                for q_idx, qlayer in enumerate(quanv_list):
+                # Loop over each kernelsolution layer
+                for q_idx, qlayer in enumerate(kernels_list):
                     
                     # --- THIS IS THE MODIFIED BLOCK ---
                     if mode == 'standard':
@@ -157,12 +148,15 @@ def preprocess_and_save_optimized(
                         processed_data = qlayer(images).cpu()
 
                     elif mode == 'by_selected_patches':
+                        # Ensure num_channels is set for this mode
+                        if num_channels is None:
+                             raise ValueError("num_channels must be set for 'by_selected_patches' mode")
 
                         # 1. Get patches from model1
                         selected_patches = model1.get_patches_by_attention(x=images, paralel_branch=0)[0]
                         # selected_patches shape: (B_img, 1_selection_amount, C, patch_size, patch_size)
 
-                        # 2. Reshape patches to fit quanvolution input
+                        # 2. Reshape patches to fit kernelsolution input
                         aux_patches = selected_patches.view(
                             -1, 
                             num_channels, 
@@ -170,10 +164,22 @@ def preprocess_and_save_optimized(
                             p1['1_patch_size']
                         )  # Shape: (B * num_patches, C, patch_size, patch_size)
 
-                        # 3. Apply the current quanvolution layer
+                        # 3. Apply the current kernelsolution layer
                         aux_patch_outs = qlayer(aux_patches)
                         # Shape: (B * num_patches, C * q, H_out, W_out) # C_out = C * (number of qubits measured = q)
-                        measured_qubits = aux_patch_outs.shape[-3] // num_channels # q = (C * q) /c, in theory haha
+                        
+                        # Handle case where qlayer output might be flat
+                        if aux_patch_outs.dim() == 2: # (B*num_patches, features)
+                            # Assuming H_out and W_out are 1, and C*q is the feature dim
+                             measured_qubits = aux_patch_outs.shape[1] // num_channels
+                             aux_patch_outs = aux_patch_outs.view(
+                                 aux_patch_outs.shape[0], # B * num_patches
+                                 -1, # C * q
+                                 1,  # H_out
+                                 1   # W_out
+                             )
+                        else:
+                            measured_qubits = aux_patch_outs.shape[-3] // num_channels # q = (C * q) /c, in theory haha
 
                         if hasattr(qlayer, 'channels_out'):
                             # Check that the number of output channels matches the number of measured qubits
@@ -200,7 +206,6 @@ def preprocess_and_save_optimized(
                                 p1['1_selection_amount'] * measured_qubits,
                                 num_channels * p1['1_patch_size']**2
                             )
-                            
 
                         processed_data = aux_patch_outs.view(shape_to_reshape_toQ).cpu()
 
@@ -217,22 +222,22 @@ def preprocess_and_save_optimized(
                     # Print shapes for the *first batch* of the *first split*
                     if i == 0 and all(len(b) == 1 for b in temp_data_batches): # if first batch
                         if mode == 'by_selected_patches':
-                            print(f"\n--- Debug Shapes (q_idx: {q_idx}, name: {quanv_names[q_idx]}, split: {dl_name}, batch 0) ---")
+                            print(f"\n--- Debug Shapes (q_idx: {q_idx}, name: {kernels_names[q_idx]}, split: {dl_name}, batch 0) ---")
                             print(f"Shape out of q-convolution (aux_patch_outs): {aux_patch_outs.shape}")
                             print(f"Shape after reshape (processed_data batch): {processed_data.shape}")
                             print(f"Stored item shape (last_processed_shapes): {processed_data.shape[1:]}")
                             print(f"--------------------------------------------------")
                         else: # Standard mode
-                            print(f"\n--- Debug Shapes (q_idx: {q_idx}, name: {quanv_names[q_idx]}, split: {dl_name}, batch 0) ---")
+                            print(f"\n--- Debug Shapes (q_idx: {q_idx}, name: {kernels_names[q_idx]}, split: {dl_name}, batch 0) ---")
                             print(f"Shape after q-convolution (processed_data batch): {processed_data.shape}")
                             print(f"Stored item shape (last_processed_shapes): {processed_data.shape[1:]}")
                             print(f"--------------------------------------------------")
                             
         # --- 4. Consolidate Batches ---
 
-        for q_idx in range(num_quanv):
+        for q_idx in range(num_kernels):
             if not temp_data_batches[q_idx]:
-                print(f"Warning: No data processed for {dl_name}, quanv {quanv_names[q_idx]} (idx {q_idx}).")
+                print(f"Warning: No data processed for {dl_name}, kernels {kernels_names[q_idx]} (idx {q_idx}).")
                 all_quantum_datasets_tensors[q_idx].append([])
                 continue
 
@@ -244,14 +249,15 @@ def preprocess_and_save_optimized(
 
     # --- 5. Create DataLoaders and Save Datasets ---
 
-    for q_idx in range(num_quanv):
+    for q_idx in range(num_kernels):
 
-        dataset_name_suffix = quanv_names[q_idx] 
-        current_quanv_tensors = all_quantum_datasets_tensors[q_idx]
+        dataset_name_suffix = kernels_names[q_idx] 
+        current_kernels_tensors = all_quantum_datasets_tensors[q_idx]
 
-        if not current_quanv_tensors or not any(split for split in current_quanv_tensors):
-            print(f"Warning: No data found for quanv '{dataset_name_suffix}' (idx {q_idx}). Skipping.")
-            results.append(None)
+        if not current_kernels_tensors or not any(split for split in current_kernels_tensors):
+            print(f"Warning: No data found for kernels '{dataset_name_suffix}' (idx {q_idx}). Skipping.")
+            
+            results[dataset_name_suffix] = None
             continue
 
         # Build dataloaders
@@ -259,32 +265,26 @@ def preprocess_and_save_optimized(
             data_dir=None,
             batch_size=B,
             channels_last=p.get('channels_last', False) if p else False,
-            tensors=current_quanv_tensors,
+            tensors=current_kernels_tensors,
             transforms={'train': None, 'val': None, 'test': None}
         )
 
         # Save the datasets using the new suffix
         # Ensure that the number of splits matches the save calls
-        num_splits = len(current_quanv_tensors)
-        _save_dataset(current_quanv_tensors[0], save_path_quantum, dataset_name_suffix, 'train')
+        num_splits = len(current_kernels_tensors)
+        _save_dataset(current_kernels_tensors[0], save_path_quantum, dataset_name_suffix, 'train')
         if num_splits > 1:
-            _save_dataset(current_quanv_tensors[1], save_path_quantum, dataset_name_suffix, 'val')
+            _save_dataset(current_kernels_tensors[1], save_path_quantum, dataset_name_suffix, 'val')
         if num_splits > 2:
-            _save_dataset(current_quanv_tensors[2], save_path_quantum, dataset_name_suffix, 'test')
+            _save_dataset(current_kernels_tensors[2], save_path_quantum, dataset_name_suffix, 'test')
         # Add more if you have more splits
         if num_splits > 3: 
             for i in range(3, num_splits):
-                 _save_dataset(current_quanv_tensors[i], save_path_quantum, dataset_name_suffix, f'split_{i}')
+                 _save_dataset(current_kernels_tensors[i], save_path_quantum, dataset_name_suffix, f'split_{i}')
 
-
-        # Record shape information
-        try:
-            # Append shape info to the list of dataloaders
-            Quantums.append(last_processed_shapes[q_idx])
-        except Exception as e:
-            print(f"Warning: Failed to append shape info for '{dataset_name_suffix}': {e}")
         
-        results.append(Quantums)
+        # MODIFICATION: Assign dataloaders to dictionary using key
+        results[dataset_name_suffix] = [ *Quantums, last_processed_shapes[q_idx]]
 
     return results
         

@@ -44,7 +44,7 @@ class QuantumKernel(nn.Module):
         self.ancilla = ancilla        
 
     def forward(self,x):
-        assert x.shape[-1] + self.ancilla == self.circuit.num_qubits, f"patch_size**2 should match number of qubits in the kernel"
+        assert x.shape[-1] + self.ancilla == self.circuit.num_qubits, f"kernel_size**2 should match number of qubits in the kernel"
         
         if self.ancilla > 0:
             ancilla_tensor = torch.zeros(*x.shape[:-1], self.ancilla, device=x.device, dtype=x.dtype)
@@ -56,7 +56,7 @@ class QuantumKernel(nn.Module):
     
 
 class QuantumConv2D(nn.Module):
-    def __init__(self, patch_size=3, stride=1, padding=0, channels_out = [4], channels_last = False, graph= 'chain', entangle_method ='CNOT', ancilla = 1, pad_filler = 'median'):
+    def __init__(self, kernel_size=3, stride=1, padding=0, channels_out = [4], channels_last = False, graph= 'chain', entangle_method ='CNOT', ancilla = 1, pad_filler = 'median'):
         super().__init__()
 
         if ancilla and channels_out != [-1]:
@@ -64,11 +64,11 @@ class QuantumConv2D(nn.Module):
 
         self.channels_out = channels_out if not ancilla else [-1]
         self.kernel = QuantumKernel(
-            circuit = QuantumLayer(num_qubits = patch_size**2 + ancilla, graph = graph, entangle_method=entangle_method),
+            circuit = QuantumLayer(num_qubits = kernel_size**2 + ancilla, graph = graph, entangle_method=entangle_method),
             channels_out = channels_out, ancilla = ancilla
         )
 
-        self.patch_size = patch_size
+        self.kernel_size = kernel_size
         self.stride = stride
         self.padding = padding
         self.pad_filler = pad_filler
@@ -78,7 +78,7 @@ class QuantumConv2D(nn.Module):
             raise ValueError("Padding must be an integer or a dict of 4 integers {'Up': int, 'Down': int, 'Left': int, Right': int}.")
         self.ancilla = ancilla
         # We'll perform median padding manually so set unfold padding to 0
-        self.unfold = nn.Unfold(kernel_size=self.patch_size, stride=self.stride, padding=0) # Unfold the input to get sliding local blocks
+        self.unfold = nn.Unfold(kernel_size=self.kernel_size, stride=self.stride, padding=0) # Unfold the input to get sliding local blocks
         self.channels_last = channels_last
 
     
@@ -94,10 +94,11 @@ class QuantumConv2D(nn.Module):
             B, C, H, W = x.shape 
         elif x.ndim == 3:
             B, C, H, W = 1 , *x.shape
+            
         q = len(self.channels_out) 
 
-        H_out = (H + self.padding['Up'] + self.padding['Down'] - self.patch_size) // self.stride + 1
-        W_out = (W + self.padding['Left'] + self.padding['Right'] - self.patch_size) // self.stride + 1
+        H_out = (H + self.padding['Up'] + self.padding['Down'] - self.kernel_size) // self.stride + 1
+        W_out = (W + self.padding['Left'] + self.padding['Right'] - self.kernel_size) // self.stride + 1
 
         outputs_by_channel = []
 
@@ -107,8 +108,8 @@ class QuantumConv2D(nn.Module):
             # Apply median padding manually so unfold uses padded tensor
             y = custom_pad_2d(y, self.padding, self.pad_filler)
 
-            patches = self.unfold(y)  # (B, patch_size^2, L), L is number of patches
-            patches = patches.transpose(1, 2)  # (B, L, patch_size^2)
+            patches = self.unfold(y)  # (B, kernel_size^2, L), L is number of patches
+            patches = patches.transpose(1, 2)  # (B, L, kernel_size^2)
 
             # Flatten to (B * L, patch_vector)
             patch_vectors = patches.reshape(-1, patches.shape[-1])  # (B*L, patch_dim)
