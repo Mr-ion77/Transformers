@@ -186,9 +186,12 @@ class TransformedTensorDataset(torch.utils.data.Dataset):
         self.transform = transform
 
     def __getitem__(self, index):
-        image, label =  self.tensors[index] 
+        image, label, *thing =  self.tensors[index] 
         if self.transform:
             image = self.transform(image)
+        if thing:
+            print(f"image shape: {image.shape}, label: {label.shape}, thing: {len(thing)}")
+            raise ValueError("Something unexpected in tensors shape, consider revising the code.")
         return image, label, index
 
     def __len__(self):

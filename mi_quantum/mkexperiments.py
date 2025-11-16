@@ -19,7 +19,7 @@ import json
 import pandas as pd
 import mi_quantum.quantum as quantum  
 import mi_quantum.data as data
-from mi_quantum.data_to_qdata import preprocess_and_save
+from mi_quantum.data_to_qdata import preprocess_and_save, cut_extra_channels_from_latents
 import mi_quantum.training as training
 # ... other imports ...
 from TelegramBot import SendToTelegram
@@ -232,7 +232,8 @@ def make_experiment_transformer(exp_config, p_base, all_iter={}, model_iter={}, 
                         learning_rate=p['learning_rate'], num_epochs=current_exp_config['N'], device=current_exp_config['device'], mapping=False,
                         res_folder=str(aux_save_path), hidden_size=p['hidden_size'], dropout=make_dropout(p['dropout']),
                         num_heads=p['num_head'], patch_size=p['patch_size'], num_transf=p['num_transf'],
-                        mlp=p['mlp_size'], wd=p['weight_decay'], patience= p['patience'], scheduler_factor=p['scheduler_factor'], autoencoder=False
+                        mlp=p['mlp_size'], wd=p['weight_decay'], patience= p['patience'], scheduler_factor=p['scheduler_factor'], autoencoder=False,
+                        val_train_pond = p['val_train_pond'], augmentation_prob = p['augmentation_prob']
                     )
 
                     print(f"\nPoint {idx+1} finished training. AUC: {test_auc:.5f}\n")
@@ -284,7 +285,8 @@ def make_experiment_selformer(exp_config, p1_base, p2_base, all_iter={}, m1_iter
     
     root_id = exp_config['experiment_id']
     all_iter_counter = 0
-    columns = ['idx', 'q_config', 'channels_out', 'latent_shape', '2_selection_amount'] + list(all_iter.keys()) + list(m1_iter.keys()) + list(data_iter.keys()) + list(m2_iter.keys()) + DEFAULT_COLUMNS
+    columns = ['idx', 'q_config', 'channels_out', 'latent_shape', '2_selection_amount'] + list(all_iter.keys()) + list(m1_iter.keys()) + list(data_iter.keys()) + list(m2_iter.keys()) + DEFAULT_COLUMNS + ['#params_sel', '#params_class']
+    columns.remove('1_channels_out') 
     # filepath: /home/carlosR/QTransformer/test_functions.py
     for pack_all in itertools.product(*all_iter.values()):
 
@@ -308,12 +310,13 @@ def make_experiment_selformer(exp_config, p1_base, p2_base, all_iter={}, m1_iter
         try:
             # Save dictionary with all the hyperparameters and results in a json file
             progress = 0
-            csv_path = make_directories_for_experiment( variant='selformer', exp_config = exp_config, p1 = p1, p2 = p2, 
+            csv_path, save_path = make_directories_for_experiment( variant='selformer', exp_config = exp_config, p1 = p1, p2 = p2, 
                                                         all_iter = all_iter, m1_iter = m1_iter, data_iter = data_iter, m2_iter =m2_iter, columns = columns )
             # Load data
             notrans_train_dl, train_dl, val_dl, test_dl, shape = data.get_medmnist_dataloaders(
                 pixel=28, data_flag='dermamnist', extra_tr_without_trans = True, batch_size=exp_config['B'], num_workers=4, pin_memory=True
             )
+            
 
             # Obtain general settings regarding dataset shape
             num_channels = shape[-1] if exp_config['channels_last'] else shape[0]
@@ -380,10 +383,14 @@ def make_experiment_selformer(exp_config, p1_base, p2_base, all_iter={}, m1_iter
                         print("Current params for data:", current_params)
                         custom_update_dict(p1, current_params)
                         custom_update_dict(p2, current_params)
+
+                        if exp_config['B'] >= 8 and exp_config['special_batch_for_data']:
+                            notrans_train_dl, train_dl, val_dl, test_dl, shape = data.get_medmnist_dataloaders(
+                                pixel=28, data_flag='dermamnist', extra_tr_without_trans = True, batch_size=1, num_workers=4, pin_memory=True
+                            )
                             
                         # Prepare datasets for the second step: get latent representations for each dataset and transform them into a new dataloader
                         DataLoaders = [notrans_train_dl, val_dl, test_dl]
-
                         paddings = { 2 : { 'Up': 1, 'Down': 0, 'Left': 1, 'Right': 0 }, 3 : { 'Up': 1, 'Down': 1, 'Left': 1, 'Right': 1 } }
 
                         Kernels = { 'none' :        torch.nn.Identity(),
@@ -414,64 +421,69 @@ def make_experiment_selformer(exp_config, p1_base, p2_base, all_iter={}, m1_iter
                             device = exp_config['device']
                         )
 
+                        channel_iterator =  range( (len(p1['1_channels_out']) if 'patchwise' in Kernels else 0 ) * (exp_config['rewind_channels'] != 0), 0 , - exp_config['rewind_channels'] )
 
                         # Create second model for the second step)
 
-                        for config in list(Kernels.keys()):
+                        for config in list(Kernels.keys()):   
 
-                            if trained_once_none_config and config == 'none':
-                                continue                                
-
-                            for pack_class in itertools.product(*m2_iter.values()):
-                    
-                                current_params = dict(zip(m2_iter.keys(), pack_class))
-                                print("Current params for classification:", current_params)
-                                custom_update_dict(p1, current_params)
-                                custom_update_dict(p2, current_params)
-                                custom_update_dict( p2, {'selection_amount' : p1['1_selection_amount'] + p2['len_channels_scaler'] * len(p1['1_channels_out'])}  )  # Adjust selection amount for classifier})  
-                                config_dataset = Latents[config]
-                                shape2 = config_dataset[-1]  # Shape of one sample in the test set
-                                print("Shape2:", shape2)
-
-                                model2 = quantum.vit.VisionTransformer(
-                                    img_size=shape[-1], num_channels= 3, num_classes=exp_config['num_classes'],
-                                    patch_size=p2['patch_size'], hidden_size= shape2[-1], num_heads=p2['num_head'], Attention_N = p2['Attention_N'],
-                                    num_transformer_blocks=p2['num_transf'], attention_selection= p2['attention_selection'], special_cls = p2['special_cls'], 
-                                    mlp_hidden_size=p2['mlp_size'], quantum_mlp = False, dropout = make_dropout(p2['dropout']), channels_last=exp_config['channels_last'], quantum_classification = False,
-                                    paralel = p2['paralel'] , RD = p2['RD'], q_stride = p2['q_stride'], connectivity = 'chain', patch_embedding_required = 'false'
-                                )
-
-                                print('\nTraining second model: classifier ViT on latent representations\n')
-                                print(f'QUANTUM SETTING IS: {config} and current lr is: {p2["learning_rate"]}')
+                            for i in channel_iterator:
                                 
-                                # Train second model
-                                test_auc, test_acc, val_auc, val_acc, train_auc, train_acc, params = training.train_and_evaluate(
-                                    model2, config_dataset[0], config_dataset[1], config_dataset[2], num_classes=exp_config['num_classes'],
-                                    learning_rate=p2['learning_rate'], num_epochs=exp_config['N2'], device=exp_config['device'], mapping=False,
-                                    res_folder=str(save_path), hidden_size=p2['hidden_size'], dropout=make_dropout(p2['dropout']),
-                                    num_heads=p2['num_head'], patch_size=p2['patch_size'], num_transf=p2['num_transf'],
-                                    mlp=p2['mlp_size'], wd=p2['weight_decay'], patience= p2['patience'], scheduler_factor=p2['scheduler_factor'], 
-                                    autoencoder=False, augmentation_prob = p2['augmentation_prob'], val_train_pond=p2['val_train_pond']
-                                )
-                                
-                                # Save results
-                                row = {
-                                    'idx': idx, 
-                                        'q_config': config, 'channels_out' : len(p1['1_channels_out']) if config == 'patchwise' else 0, 'latent_shape' : [*shape2], '2_selection_amount' : p2['selection_amount'],
-                                        'test_auc_sel': test_auc_sel, 'test_acc_sel': test_acc_sel, '#params_sel': params_sel, 
-                                        'test_auc': test_auc, 'test_acc': test_acc, 'val_auc': val_auc, 'val_acc': val_acc, 'train_auc': train_auc, 'train_acc' : train_acc,
-                                        '#params_class': params,
-                                        **p1,
-                                        **p2
-                                }
+                                p1.update( {'1_channels_out' : p1['1_channels_out'][:i] } )
+                                Aux_Latents = cut_extra_channels_from_latents( Latents, i, p1['1_channels_out'] ) if config == 'patchwise' else Latents
 
-                                pd.DataFrame([row], columns=columns).to_csv(
-                                    csv_path, mode='a', header=False, index=False
-                                )
+                                for pack_class in itertools.product(*m2_iter.values()):
 
-                            if config == 'none':
-                                trained_once_none_config = True     
+                                    if trained_once_none_config and config == 'none':
+                                        continue  
+                        
+                                    current_params = dict(zip(m2_iter.keys(), pack_class))
+                                    print("Current params for classification:", current_params)
+                                    custom_update_dict(p1, current_params)
+                                    custom_update_dict(p2, current_params)
+                                    custom_update_dict( p2, {'selection_amount' : p1['1_selection_amount'] + (1 - p1['1_flatten_extra_channels']) * p2['len_channels_scaler'] * len(p1['1_channels_out'])}  )  # Adjust selection amount for classifier})  
+                                    config_dataset = Aux_Latents[config]
+                                    shape2 = config_dataset[-1]  # Shape of one sample in the test set
+                                    print("Shape2:", shape2)
 
+                                    model2 = quantum.vit.VisionTransformer(
+                                        img_size=shape[-1], num_channels= 3, num_classes=exp_config['num_classes'],
+                                        patch_size=p2['patch_size'], hidden_size= shape2[-1], num_heads=p2['num_head'], Attention_N = p2['Attention_N'],
+                                        num_transformer_blocks=p2['num_transf'], attention_selection= p2['attention_selection'], special_cls = p2['special_cls'], 
+                                        mlp_hidden_size=p2['mlp_size'], quantum_mlp = False, dropout = make_dropout(p2['dropout']), channels_last=exp_config['channels_last'], quantum_classification = False,
+                                        paralel = p2['paralel'] , RD = p2['RD'], q_stride = p2['q_stride'], connectivity = 'chain', patch_embedding_required = 'false'
+                                    )
+
+                                    print('\nTraining second model: classifier ViT on latent representations\n')
+                                    print(f'QUANTUM SETTING IS: {config} and current lr is: {p2["learning_rate"]}')
+                                    
+                                    # Train second model
+                                    test_auc, test_acc, val_auc, val_acc, train_auc, train_acc, params = training.train_and_evaluate(
+                                        model2, config_dataset[0], config_dataset[1], config_dataset[2], num_classes=exp_config['num_classes'],
+                                        learning_rate=p2['learning_rate'], num_epochs=exp_config['N2'], device=exp_config['device'], mapping=False,
+                                        res_folder=str(save_path), hidden_size=p2['hidden_size'], dropout=make_dropout(p2['dropout']),
+                                        num_heads=p2['num_head'], patch_size=p2['patch_size'], num_transf=p2['num_transf'],
+                                        mlp=p2['mlp_size'], wd=p2['weight_decay'], patience= p2['patience'], scheduler_factor=p2['scheduler_factor'], 
+                                        autoencoder=False, augmentation_prob = p2['augmentation_prob'], val_train_pond=p2['val_train_pond']
+                                    )
+                                    
+                                    # Save results
+                                    row = {
+                                        'idx': idx, 
+                                            'q_config': config, 'channels_out' : len(p1['1_channels_out']) if config == 'patchwise' else 0, 'latent_shape' : [*shape2], '2_selection_amount' : p2['selection_amount'],
+                                            'test_auc_sel': test_auc_sel, 'test_acc_sel': test_acc_sel, '#params_sel': params_sel, 
+                                            'test_auc': test_auc, 'test_acc': test_acc, 'val_auc': val_auc, 'val_acc': val_acc, 'train_auc': train_auc, 'train_acc' : train_acc,
+                                            '#params_class': params,
+                                            **p1,
+                                            **p2
+                                    }
+
+                                    pd.DataFrame([row], columns=columns).to_csv(
+                                        csv_path, mode='a', header=False, index=False
+                                    )
+
+                                if config == 'none':
+                                    trained_once_none_config = True     
 
             if exp_config['send_telegram']:
                 SendToTelegram(csv_file = csv_path, columns = graph_columns,

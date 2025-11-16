@@ -130,7 +130,7 @@ def preprocess_and_save(
             print(f"Skipping {dl_name} as dataloader is None.")
             # Still need to append empty lists for shape consistency
             for q_idx in range(num_kernels):
-                all_quantum_datasets_tensors[q_idx].append([])
+                all_quantum_datasets_tensors[q_idx].append( ([], []) )
             continue
 
         for images, labels, indices in tqdm(dl, desc=f"Processing {dl_name} split"):
@@ -217,7 +217,7 @@ def preprocess_and_save(
                         last_processed_shapes[q_idx] = processed_data.shape[1:]
 
                     # Append (data_batch, label_batch)
-                    temp_data_batches[q_idx].append((processed_data, labels.cpu()))
+                    temp_data_batches[q_idx].append( (processed_data, labels.cpu()) )
                     
                     # Print shapes for the *first batch* of the *first split*
                     if i == 0 and all(len(b) == 1 for b in temp_data_batches): # if first batch
@@ -238,14 +238,16 @@ def preprocess_and_save(
         for q_idx in range(num_kernels):
             if not temp_data_batches[q_idx]:
                 print(f"Warning: No data processed for {dl_name}, kernels {kernels_names[q_idx]} (idx {q_idx}).")
-                all_quantum_datasets_tensors[q_idx].append([])
+                all_quantum_datasets_tensors[q_idx].append( ([], []) )
                 continue
 
-            all_quantums_split = torch.cat([data[0] for data in temp_data_batches[q_idx]], dim=0)
-            all_labels_split = torch.cat([data[1] for data in temp_data_batches[q_idx]], dim=0)
+            all_quantums_split = torch.cat([data[0] for data in temp_data_batches[q_idx]], axis = 0)
+            all_labels_split = torch.cat([data[1] for data in temp_data_batches[q_idx]], axis = 0)
 
-            dataset_tensor_list = list(zip(all_quantums_split, all_labels_split))
-            all_quantum_datasets_tensors[q_idx].append(dataset_tensor_list)
+            print(f"Hypershape for {dl_name}, kernels {kernels_names[q_idx]} (idx {q_idx}): {all_quantums_split.shape}, Labels shape: {all_labels_split.shape}")
+
+            all_quantum_datasets_tensors[q_idx].append( list(zip(all_quantums_split, all_labels_split) ) )
+        
 
     # --- 5. Create DataLoaders and Save Datasets ---
 
@@ -262,11 +264,11 @@ def preprocess_and_save(
 
         # Build dataloaders
         Quantums = Data.create_dataloaders(
-            data_dir=None,
-            batch_size=B,
-            channels_last=p.get('channels_last', False) if p else False,
-            tensors=current_kernels_tensors,
-            transforms={'train': None, 'val': None, 'test': None}
+            data_dir = None,
+            batch_size = B,
+            channels_last = p.get('channels_last', False) if p else False,
+            tensors = current_kernels_tensors,
+            transforms = {'train': None, 'val': None, 'test': None}
         )
 
         # Save the datasets using the new suffix
@@ -284,13 +286,71 @@ def preprocess_and_save(
 
         
         # MODIFICATION: Assign dataloaders to dictionary using key
-        results[dataset_name_suffix] = [ *Quantums, last_processed_shapes[q_idx]]
+        results[dataset_name_suffix] = Quantums
+        print(f"Saved quantum datasets for kernels '{dataset_name_suffix}' at {save_path_quantum}")
 
     return results
-        
 
-if __name__ == 'main':
-    preprocess_and_save([train,val,test], Quanvolution)
+
+def cut_extra_channels_from_latents( Latents, i , channels_out ):    
+    """
+    Latents: List of dataloaders [train, val, test]
+    channels_out: list of int, channels to keep
+    """
+    
+    none_latent = Latents.get('none', None)
+    patchwise_latent = Latents.get('patchwise', None)
+
+    if patchwise_latent is None:
+        print("No 'patchwise' latent found. Returning original Latents.")
+        return Latents
+    
+    else:
+
+        getbatchsize = next(iter(patchwise_latent[0]))
+        B = getbatchsize[0].shape[0]  # Assuming shape is (B, C, H, W) or (B, C)
+        new_patchwise_latent = []
+
+        for split_idx, split in enumerate(patchwise_latent):
+
+            if not isinstance(split, torch.utils.data.DataLoader):
+                print(f"Split {split_idx} is not a DataLoader. Skipping.")
+                continue
+
+            new_data = []
+            new_labels = []
+            for samples, labels, idx in split:
+
+                shape = samples.shape  # (B, total_channels, H, W) or (B, total_channels)
+                new_samples = samples[..., : ( i*(shape[-2]// len(channels_out)) ) , :  ]  # Keep only the first i channels
+                new_data.extend(new_samples)
+                new_labels.extend(labels)
+                shape_after = new_samples.shape
+
+            new_patchwise_latent.append( list( zip(torch.stack(new_data), torch.tensor(new_labels)) ))
+
+        new_patchwise_latent_dataloaders = Data.create_dataloaders(
+            data_dir= None,
+            batch_size= B,
+            channels_last= False,
+            tensors = new_patchwise_latent,
+            transforms = {'train': None, 'val': None, 'test': None}
+        ) 
+
+        NewLatents = {
+            'none' : none_latent,
+            'patchwise' : new_patchwise_latent_dataloaders
+        }
+
+        print("Cut extra channels from 'patchwise' latent.", f"\nDifference in shapes: {shape} -> {shape_after}")
+
+        if NewLatents is None:
+            print("Something went wrong")
+            raise ValueError("Something went wrong")
+        
+    return NewLatents
+
+        
 
 
 
