@@ -3,6 +3,11 @@ from torch import nn
 from mi_quantum.quantum.pennylane_backend import QuantumLayer
 import numbers
 
+# See:
+# - https://nlp.seas.harvard.edu/annotated-transformer/
+# - https://github.com/rdisipio/qtransformer/blob/main/qtransformer.py
+# - https://github.com/google-research/vision_transformer/blob/main/vit_jax/models_vit.py
+
 def identity_tensor(d: int, n: int) -> torch.Tensor:
         """
         Creates an n-dimensional identity tensor of shape (d, d, ..., d)
@@ -38,10 +43,6 @@ def rank_patches_by_attention(attn: torch.Tensor) -> torch.Tensor:
 
             return sorted_indices
 
-# See:
-# - https://nlp.seas.harvard.edu/annotated-transformer/
-# - https://github.com/rdisipio/qtransformer/blob/main/qtransformer.py
-# - https://github.com/google-research/vision_transformer/blob/main/vit_jax/models_vit.py
 
 class NMultiheadSelfAttention(nn.Module):
     def __init__(
@@ -142,7 +143,7 @@ class NMultiheadSelfAttention(nn.Module):
         return out, attn
 
 class MultiheadSelfAttention(nn.Module):
-    def __init__(self, embed_dim, num_heads, dropout={'embedding_attn': 0.225, 'after_attn': 0.225, 'feedforward': 0.225, 'embedding_pos': 0.225}, special_cls = False):
+    def __init__(self, embed_dim, num_heads, dropout={'embedding_attn': 0.225, 'after_attn': 0.225, 'feedforward': 0.225, 'embedding_pos': 0.225}, special_cls = 'none'):
         super().__init__()
         assert embed_dim % num_heads == 0, f"Embedding dimension ({embed_dim}) should be divisible by number of heads ({num_heads})"
 
@@ -153,8 +154,10 @@ class MultiheadSelfAttention(nn.Module):
 
         print('Started a MutliheadSelfAttention layer with embed_dim:', embed_dim, 'num_heads:', num_heads, 'head_dim:', self.head_dim)
 
-        if self.special_cls:
+        if self.special_cls == 'full_projection':
             self.cls_proj = nn.Linear(embed_dim, embed_dim)
+        if self.special_cls == 'part_projection':
+            self.cls_ponderator = nn.Parameter( torch.tensor([0.5]) )
 
         self.q_proj = nn.Linear(embed_dim, embed_dim)
         self.k_proj = nn.Linear(embed_dim, embed_dim)
@@ -186,16 +189,24 @@ class MultiheadSelfAttention(nn.Module):
         # x.shape = (batch_size, seq_len, embed_dim)
         assert embed_dim == self.embed_dim, f"Input embedding dimension ({embed_dim}) should match layer embedding dimension ({self.embed_dim})"
 
-        if self.special_cls:
+        full_cls_bool = self.special_cls == 'full_projection'                           # For ramification purposes depending on special_cls config
+        part_cls_bool = ( self.special_cls == 'partial_projection' or full_cls_bool )   # For ramification purposes depending on special_cls config
+
+        if part_cls_bool:
             cls_token = x[:,0,:]
             x = x[:,1:,:]
-            cls_proj = self.cls_proj(x).reshape(batch_size, seq_len - self.special_cls, self.num_heads, self.head_dim).transpose(1, 2)  # (B, H, S, D)
 
+            if full_cls_bool:
+                cls_proj = self.cls_proj(x).reshape(batch_size, seq_len - part_cls_bool, self.num_heads, self.head_dim).transpose(1, 2)  # (B, H, S, D)
+            else:
+                cls_proj = cls_token.expand(-1, seq_len - part_cls_bool, -1).reshape(batch_size, seq_len - part_cls_bool, self.num_heads, self.head_dim).transpose(1, 2) # (B, H, S, D)
+                cls_proj = self.cls_ponderator*cls_proj + x*(1-cls_proj)
 
         q, k, v, = [
-            proj(x).reshape(batch_size, seq_len - self.special_cls, self.num_heads, self.head_dim).transpose(1, 2)  # (B, H, S, D)  
+            proj(x).reshape(batch_size, seq_len - part_cls_bool, self.num_heads, self.head_dim).transpose(1, 2)                                                          # (B, H, S, D)  
             for proj, x in zip([self.q_proj, self.k_proj, self.v_proj], [x, x, x, x])
         ]
+
         # q, k, v.shape = (batch_size, num_heads, seq_len, head_dim)
         qk_dot = q @ k.transpose(-2, -1)
         # promote for stability, compute norms and avoid NaNs
@@ -207,7 +218,7 @@ class MultiheadSelfAttention(nn.Module):
         # Compute output
         values = attn_standard @ v  # (B, H, S, D)
 
-        if self.special_cls:
+        if part_cls_bool:
             # Compute special attention logits involving the cls token: 
             # compute the projection over the cls_token of the projection of key over query.
             # First get query for cls_token
@@ -232,9 +243,8 @@ class MultiheadSelfAttention(nn.Module):
             # Compute output
             values += attn_cls_to_others @ cls_proj
             # values.shape = (batch_size, num_heads, seq_len - 1, head_dim)
-
-        if self.special_cls:
-            values = torch.cat( (cls_out ,values.transpose(1, 2).reshape(batch_size, seq_len - self.special_cls, embed_dim)), dim = 1)
+            values = torch.cat( (cls_out ,values.transpose(1, 2).reshape(batch_size, seq_len - part_cls_bool, embed_dim)), dim = 1)
+            
         else:
             values = values.transpose(1, 2).reshape(batch_size, seq_len, embed_dim)
 
@@ -409,7 +419,7 @@ class TransformerBlock_Attention_Chosen_QMLP(nn.Module):
 class VisionTransformer(nn.Module):
     def __init__(self, img_size, num_channels, num_classes, patch_size, hidden_size, num_heads, num_transformer_blocks, mlp_hidden_size, Attention_N = 2,
                     quantum_mlp = False, quantum_classification = False, dropout= {'embedding_attn': 0.225, 'after_attn': 0.225, 'feedforward': 0.225, 'embedding_pos': 0.225}, 
-                    channels_last=False, RD = 1, attention_selection = 'filter', selection_amount = None, special_cls = False,
+                    channels_last=False, RD = 1, attention_selection = 'filter', selection_amount = None, special_cls = 'none',
                     paralel = 1, q_stride = 1, connectivity = 'chain', patch_embedding_required = 'true'
                     ):
         super().__init__()
@@ -663,6 +673,7 @@ class VisionTransformer(nn.Module):
             # x.shape = (batch_size, num_patches, hidden_size)
         elif self.patch_embedding_required == 'flatten':
             x = x.view((x.shape[0], x.shape[1], -1))
+
 
         # CLS token (Even if we haven't applied patch embedding here, we assume the input x doesn't have the cls token included yet)
         #print(f"Shapes, x and cls: {x.shape}, {self.cls_token.expand(x.shape[0], -1, -1).shape}")

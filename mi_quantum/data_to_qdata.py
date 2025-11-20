@@ -66,7 +66,9 @@ def preprocess_and_save(
     num_channels = None, 
     flatten_extra_channels = False,
     p = None, 
-    device = device
+    device = device,
+    flatten = True,
+    concatenate_original = False
 ):
     """
     Preprocess datasets using one or more Quanvolution modules efficiently.
@@ -141,11 +143,15 @@ def preprocess_and_save(
                 
                 # Loop over each kernelsolution layer
                 for q_idx, qlayer in enumerate(kernels_list):
+
+                    not_none_bool = kernels_names[q_idx] != 'none'
                     
                     # --- THIS IS THE MODIFIED BLOCK ---
                     if mode == 'standard':
                         # Original behavior
                         processed_data = qlayer(images).cpu()
+                        if concatenate_original and not_none_bool:
+                            processed_data = torch.cat([images, processed_data], dim = 1)  #Concatenate original channels to quantum processed ones
 
                     elif mode == 'by_selected_patches':
                         # Ensure num_channels is set for this mode
@@ -155,59 +161,65 @@ def preprocess_and_save(
                         # 1. Get patches from model1
                         selected_patches = model1.get_patches_by_attention(x=images, paralel_branch=0)[0]
                         # selected_patches shape: (B_img, 1_selection_amount, C, patch_size, patch_size)
-
                         # 2. Reshape patches to fit kernelsolution input
-                        aux_patches = selected_patches.view(
-                            -1, 
-                            num_channels, 
-                            p1['1_patch_size'], 
-                            p1['1_patch_size']
-                        )  # Shape: (B * num_patches, C, patch_size, patch_size)
+                        aux_patches = selected_patches.view(-1, num_channels, p1['1_patch_size'], p1['1_patch_size'])  # Shape: (B * num_patches, C, patch_size, patch_size)
 
-                        # 3. Apply the current kernelsolution layer
-                        aux_patch_outs = qlayer(aux_patches)
-                        # Shape: (B * num_patches, C * q, H_out, W_out) # C_out = C * (number of qubits measured = q)
+                        aux_shape = (B_img, p1['1_selection_amount'], -1, p1['1_patch_size'], p1['1_patch_size'])
+                        # 3. Apply the current kernelsolution layer and undo the change
+                        aux_patch_outs = qlayer(aux_patches).view(aux_shape) # Shape: (B , num_patches, C * q, H_out, W_out) # C_out = C * (number of qubits measured = q)
+
+                        measured_qubits = aux_patch_outs.shape[-3] // num_channels # q = (C * q) /c, in theory haha
+
+
+                        if concatenate_original and not_none_bool:
+                            aux_patch_outs = torch.cat([aux_patches.view(aux_shape), aux_patch_outs], dim = 2) #Concatenate original channels to quantum processed ones
+
                         
-                        # Handle case where qlayer output might be flat
-                        if aux_patch_outs.dim() == 2: # (B*num_patches, features)
-                            # Assuming H_out and W_out are 1, and C*q is the feature dim
-                             measured_qubits = aux_patch_outs.shape[1] // num_channels
-                             aux_patch_outs = aux_patch_outs.view(
-                                 aux_patch_outs.shape[0], # B * num_patches
-                                 -1, # C * q
-                                 1,  # H_out
-                                 1   # W_out
-                             )
-                        else:
-                            measured_qubits = aux_patch_outs.shape[-3] // num_channels # q = (C * q) /c, in theory haha
-
                         if hasattr(qlayer, 'channels_out'):
                             # Check that the number of output channels matches the number of measured qubits
-                            assert len(qlayer.channels_out) == measured_qubits, \
+                            assert (len(qlayer.channels_out) ) == (measured_qubits), \
                                 f"The number of output channels ({len(qlayer.channels_out)}) must equal the number of measured qubits ({measured_qubits})."
                         else:
                             # Assume 1 measured qubit if channels_out attribute doesn't exist
                             assert 1 == measured_qubits, f"The number of output channels (1) must equal the number of measured qubits ({measured_qubits})."
 
                         # 4. Determine reshape dimensions
-                        assert aux_patch_outs.shape[2] * aux_patch_outs.shape[3] == p1['1_patch_size']**2, \
-                                f"An internal shape mismatch error happened during the layer: {qlayer}:\n( { aux_patch_outs.shape[2] * aux_patch_outs.shape[3]}) must equal the number the square of the patchsize ({p1['1_patch_size']**2})."
+                        assert aux_patch_outs.shape[-1] * aux_patch_outs.shape[-2] == p1['1_patch_size']**2, \
+                                f"An internal shape mismatch error happened during the layer: {qlayer}:\n( { aux_patch_outs.shape[-1] * aux_patch_outs.shape[-2]}) must equal the square of the patchsize ({p1['1_patch_size']**2})."
                         
-                        if flatten_extra_channels:
+                        if flatten:
+                            # Flatten spatial dimensions
+                            if flatten_extra_channels:
 
-                            shape_to_reshape_toQ = (
-                                B_img, 
-                                p1['1_selection_amount'], 
-                                num_channels * measured_qubits * p1['1_patch_size']**2
-                            )
+                                shape_to_reshape_toQ = (
+                                    B_img, p1['1_selection_amount'], 
+                                    num_channels * ( concatenate_original * not_none_bool + measured_qubits) * p1['1_patch_size']**2
+                                )
+                            else:
+                                shape_to_reshape_toQ = (
+                                    B_img, p1['1_selection_amount'] * ( concatenate_original * not_none_bool + measured_qubits ),
+                                    num_channels * p1['1_patch_size']**2
+                                )
+                        
                         else:
-                            shape_to_reshape_toQ = (
-                                B_img,
-                                p1['1_selection_amount'] * measured_qubits,
-                                num_channels * p1['1_patch_size']**2
-                            )
+                            # Keep spatial dimensions
+                            if flatten_extra_channels:
+
+                                shape_to_reshape_toQ = (
+                                    B_img, p1['1_selection_amount'], 
+                                    num_channels * (measured_qubits + concatenate_original * not_none_bool), 
+                                    p1['1_patch_size'], p1['1_patch_size']
+                                )
+                            else:
+                                shape_to_reshape_toQ = (
+                                    B_img, p1['1_selection_amount'] * (measured_qubits + concatenate_original * not_none_bool),
+                                    num_channels, p1['1_patch_size'], p1['1_patch_size']
+                                )
 
                         processed_data = aux_patch_outs.view(shape_to_reshape_toQ).cpu()
+
+                        assert list(processed_data.shape[-3:]) == [num_channels,p1['1_patch_size'],p1['1_patch_size']], \
+                            f"Reshape error: got shape {list(processed_data.shape[-3:])}, expected {[num_channels,p1['1_patch_size'],p1['1_patch_size']]}"
 
                     else:
                         raise ValueError(f"Unknown mode: {mode}")
@@ -292,10 +304,11 @@ def preprocess_and_save(
     return results
 
 
-def cut_extra_channels_from_latents( Latents, i , channels_out ):    
+def cut_extra_channels_from_latents( Latents, i , channels_out , flattened = True):    
     """
     Latents: List of dataloaders [train, val, test]
-    channels_out: list of int, channels to keep
+    i: int, number of channels to keep
+    channels_out: int, total channels
     """
     
     none_latent = Latents.get('none', None)
@@ -322,7 +335,10 @@ def cut_extra_channels_from_latents( Latents, i , channels_out ):
             for samples, labels, idx in split:
 
                 shape = samples.shape  # (B, total_channels, H, W) or (B, total_channels)
-                new_samples = samples[..., : ( i*(shape[-2]// len(channels_out)) ) , :  ]  # Keep only the first i channels
+                if flattened:
+                    new_samples = samples[:, : ( i*shape[-1]// channels_out), ... ]  # Keep only the first i channels
+                else:
+                    new_samples = samples[..., : ( i*(shape[-2]// channels_out) ) , :  ]  # Keep only the first i channels
                 new_data.extend(new_samples)
                 new_labels.extend(labels)
                 shape_after = new_samples.shape

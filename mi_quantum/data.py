@@ -112,7 +112,7 @@ def datasets_to_dataloaders( datasets, **dataloader_kwargs):
 
     dataloader_list = []
     for dataset in datasets:
-        dataloader_list.append( DataLoader(dataset['data'], shuffle=dataset['split'] == 'train', **dataloader_kwargs)     )
+        dataloader_list.append( DataLoader(dataset['data'], shuffle= dataset['split'] == 'train', **dataloader_kwargs)     )
 
     return *dataloader_list, shape
 
@@ -158,12 +158,12 @@ def get_medmnist_dataloaders(pixel: int = 28, data_flag: str = 'breastmnist', ex
 
             return new_instance
 
-    train_dataset = { 'data': IndexedMedMNIST(split='train', transform=train_transform, download=True), 'split':'train'}    # Construye el dataset a partir de la clase obtenida
-    valid_dataset = { 'data': IndexedMedMNIST(split='val', transform=valid_transform, download=True), 'split':'val'} 
-    test_dataset = { 'data': IndexedMedMNIST(split='test', transform=valid_transform, download=True), 'split':'test'} 
-    
+    train_dataset = { 'data': IndexedMedMNIST(split='train', transform=train_transform, download=True, size = pixel), 'split':'train'}    # Construye el dataset a partir de la clase obtenida
+    valid_dataset = { 'data': IndexedMedMNIST(split='val', transform=valid_transform, download=True, size = pixel), 'split':'val'} 
+    test_dataset = { 'data': IndexedMedMNIST(split='test', transform=valid_transform, download=True, size = pixel), 'split':'test'} 
+    print(f"Loaded MedMNIST dataset '{data_flag}' with image size {pixel}x{pixel} and {n_channels} channels.")
     if extra_tr_without_trans:
-        no_trans_train_dataset = { 'data': IndexedMedMNIST(split='train', transform=valid_transform, download=True),'split':'train'} 
+        no_trans_train_dataset = { 'data': IndexedMedMNIST(split='train', transform=valid_transform, download=True, size = pixel),'split':'train'} 
         return datasets_to_dataloaders( [no_trans_train_dataset, train_dataset, valid_dataset, test_dataset], **dataloader_kwargs)
 
     return datasets_to_dataloaders([train_dataset, valid_dataset, test_dataset], **dataloader_kwargs)

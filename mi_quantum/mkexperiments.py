@@ -27,7 +27,7 @@ from TelegramBot import SendToTelegram
 
 # --- Global Constants ---
 DEFAULT_COLUMNS = [
-    'test_auc', 'test_acc', 'val_auc', 'val_acc', 'train_auc', 'train_acc', '#params'
+    'test_auc_sel', 'test_acc_sel' ,'test_auc', 'test_acc', 'val_auc', 'val_acc', 'train_auc', 'train_acc', '#params'
 ]
 
 # --- Core Helper Functions (from your original script) ---
@@ -51,7 +51,7 @@ def make_directories_for_experiment(variant = 'selformer', exp_config = None, p1
     base_dir = f"../QTransformer_Results_and_Datasets/{variant}_results"
     exp_dir = os.path.join(base_dir, exp_config['experiment_id'])
     
-    os.makedirs(os.path.join(base_dir, 'current_results'), exist_ok=True)
+    os.makedirs(os.path.join(base_dir, 'current_results' if not exp_config['second_at_a_time'] else 'current_results2'), exist_ok=True)
     try:
         os.makedirs(exp_dir, exist_ok=False)
     except FileExistsError as e:
@@ -93,6 +93,8 @@ def iterate_all_iter(root_id, base_exp_config, all_iter, p_bases):
     Yields: (current_exp_config, current_p_bases, current_params_all, all_iter_counter)
     """
     for all_iter_counter, pack_all in enumerate(itertools.product(*all_iter.values())):
+
+        all_iter_counter += 1
         
         experiment_id = root_id
         if all_iter:
@@ -162,6 +164,11 @@ def make_experiment_transformer(exp_config, p_base, all_iter={}, model_iter={}, 
     
     # Define columns for CSV logging
     columns = ['idx', 'all_iter_idx'] + list(all_iter.keys()) + list(model_iter.keys()) + DEFAULT_COLUMNS
+    try:
+        columns.remove('test_auc_sel')
+        columns.remove('test_acc_sel')
+    except:
+        pass
 
     progress = 0
     
@@ -207,13 +214,19 @@ def make_experiment_transformer(exp_config, p_base, all_iter={}, model_iter={}, 
 
                 # --- Innermost Loop (model_iter) ---
                 for pack_model in itertools.product(*model_iter.values()):
+
                     
                     # Apply updates from model_iter
                     current_params_model = dict(zip(model_iter.keys(), pack_model))
+                    if exp_config.get('square_arc', True):
+                        custom_update_dict( current_params_model, {'num_transf' : p['paralel'] } )
+
                     custom_update_dict(p, current_params_model)
+
                     print(f"\nCurrent params for model:", current_params_model)
 
-                    aux_save_path = Path(f"../QTransformer_Results_and_Datasets/transformer_results/current_results/grid_search{idx}")
+                    oneortwo = 'current_results' if not current_exp_config['second_at_a_time'] else 'current_results2'
+                    aux_save_path = Path(f"../QTransformer_Results_and_Datasets/transformer_results/" + oneortwo + f"/grid_search{idx}")
                     aux_save_path.mkdir(parents=True, exist_ok=True)
                     
                     # --- Model Definition ---
@@ -284,14 +297,17 @@ def make_experiment_selformer(exp_config, p1_base, p2_base, all_iter={}, m1_iter
     """
     
     root_id = exp_config['experiment_id']
-    all_iter_counter = 0
+    all_iter_counter = 1
     columns = ['idx', 'q_config', 'channels_out', 'latent_shape', '2_selection_amount'] + list(all_iter.keys()) + list(m1_iter.keys()) + list(data_iter.keys()) + list(m2_iter.keys()) + DEFAULT_COLUMNS + ['#params_sel', '#params_class']
-    columns.remove('1_channels_out') 
-    # filepath: /home/carlosR/QTransformer/test_functions.py
+    try:
+        columns.remove('#params')         # Remove unused column (Used in transformer experiments)
+        columns.remove('1_channels_out')  # Remove unused column (Used in transformer experiments)
+    except:
+        print("Columns '#params' or '1_channels_out' not in columns, skipping removal.")
+
     for pack_all in itertools.product(*all_iter.values()):
 
         experiment_id = root_id + '/all_iter_' + str(all_iter_counter) + '/'
-        all_iter_counter += 1
         exp_config.update({'experiment_id' : experiment_id, 'trained_selector_once' : False})
 
         # Create fresh copies for each iteration
@@ -314,7 +330,7 @@ def make_experiment_selformer(exp_config, p1_base, p2_base, all_iter={}, m1_iter
                                                         all_iter = all_iter, m1_iter = m1_iter, data_iter = data_iter, m2_iter =m2_iter, columns = columns )
             # Load data
             notrans_train_dl, train_dl, val_dl, test_dl, shape = data.get_medmnist_dataloaders(
-                pixel=28, data_flag='dermamnist', extra_tr_without_trans = True, batch_size=exp_config['B'], num_workers=4, pin_memory=True
+                pixel = exp_config['pixels'], data_flag='dermamnist', extra_tr_without_trans = True, batch_size=exp_config['B'], num_workers=4, pin_memory=True
             )
             
 
@@ -333,7 +349,8 @@ def make_experiment_selformer(exp_config, p1_base, p2_base, all_iter={}, m1_iter
                     SendToTelegram(progress = progress)                
 
                 print(f"\n\nPoint {idx}")
-                save_path = Path(f"../QTransformer_Results_and_Datasets/selformer_results/current_results/grid_search{idx}")
+                oneortwo = 'current_results' if not exp_config['second_at_a_time'] else 'current_results2'
+                save_path = Path(f"../QTransformer_Results_and_Datasets/selformer_results/" + oneortwo + f"/grid_search{idx}")
                 save_path.mkdir(parents=True, exist_ok=True)
                 os.makedirs(save_path / 'autoencoder', exist_ok=True)
 
@@ -347,13 +364,17 @@ def make_experiment_selformer(exp_config, p1_base, p2_base, all_iter={}, m1_iter
                     current_params = dict(zip(m1_iter.keys(), pack_sel))
                     custom_update_dict(p1, current_params)
                     custom_update_dict(p2, current_params)
+                    if exp_config.get('square_arc', True):
+                        custom_update_dict( p1, {'1_num_transf' : p1['1_paralel'] } )
+                        custom_update_dict( p2, {'num_transf'   : p2['paralel']   } )
                     print("Current params for selector:", current_params)
 
                     if (not exp_config['trained_selector_once']) or exp_config['repeat_selector']:
                         exp_config['trained_selector_once'] = True
 
                         print(f"\nTraining first model: Selector\nOptiosn: Selector with Quantum Layers: {list(exp_config['q_config'])} and Learning Rate: {p1['1_learning_rate']}\n")
-
+                        print(f"Shape of the data: {shape}\n")
+                        
                         # Model
                         model1 = quantum.vit.VisionTransformer(
                             img_size=shape[-1], num_channels=shape[0], num_classes=exp_config['num_classes'],
@@ -383,6 +404,7 @@ def make_experiment_selformer(exp_config, p1_base, p2_base, all_iter={}, m1_iter
                         print("Current params for data:", current_params)
                         custom_update_dict(p1, current_params)
                         custom_update_dict(p2, current_params)
+                        custom_update_dict(exp_config, current_params)
 
                         if exp_config['B'] >= 8 and exp_config['special_batch_for_data']:
                             notrans_train_dl, train_dl, val_dl, test_dl, shape = data.get_medmnist_dataloaders(
@@ -418,40 +440,72 @@ def make_experiment_selformer(exp_config, p1_base, p2_base, all_iter={}, m1_iter
                             p1 = p1,
                             num_channels = num_channels,
                             flatten_extra_channels = p1['1_flatten_extra_channels'],
-                            device = exp_config['device']
+                            device = exp_config['device'],
+                            flatten = not exp_config['augmenting'], 
+                            concatenate_original = exp_config.get('concatenate_original', False)
                         )
 
-                        channel_iterator =  range( (len(p1['1_channels_out']) if 'patchwise' in Kernels else 0 ) * (exp_config['rewind_channels'] != 0), 0 , - exp_config['rewind_channels'] )
+                        original_measured = p1['1_channels_out']
+                        original_channels_out = len(p1['1_channels_out'])
+                        TrainedFlattenedOnce = False
 
-                        # Create second model for the second step)
+                        channel_iterator =  range( ( original_channels_out if 'patchwise' in Kernels else 0 ) * (exp_config['rewind_channels'] != 0), 0 , - exp_config['rewind_channels']  ) if exp_config['rewind_channels'] > 0 else [ original_channels_out ]
+
+                        print( "Channel iterator for classifier:" , list(channel_iterator) )
+
+                        # Create second model for the second step) 
 
                         for config in list(Kernels.keys()):   
 
                             for i in channel_iterator:
-                                
-                                p1.update( {'1_channels_out' : p1['1_channels_out'][:i] } )
-                                Aux_Latents = cut_extra_channels_from_latents( Latents, i, p1['1_channels_out'] ) if config == 'patchwise' else Latents
+
+                                if config == 'patchwise':
+
+                                    if p1['1_flatten_extra_channels']:
+                                    
+                                        if TrainedFlattenedOnce:
+                                            print("Skipping redundant configuration with flattened extra channels already trained.")
+                                            continue
+                                        else:
+                                            TrainedFlattenedOnce = True
+
+                                    else:
+
+                                        p1.update( {'1_channels_out' : original_measured[:i] } )
+                                        Aux_Latents = cut_extra_channels_from_latents( Latents, i, original_channels_out )
+
+                                else:
+                                    Aux_Latents = Latents
 
                                 for pack_class in itertools.product(*m2_iter.values()):
 
                                     if trained_once_none_config and config == 'none':
                                         continue  
                         
-                                    current_params = dict(zip(m2_iter.keys(), pack_class))
+                                    current_params = dict( zip(m2_iter.keys(), pack_class) )
                                     print("Current params for classification:", current_params)
                                     custom_update_dict(p1, current_params)
                                     custom_update_dict(p2, current_params)
-                                    custom_update_dict( p2, {'selection_amount' : p1['1_selection_amount'] + (1 - p1['1_flatten_extra_channels']) * p2['len_channels_scaler'] * len(p1['1_channels_out'])}  )  # Adjust selection amount for classifier})  
+                                    custom_update_dict( p2, {'selection_amount' : p1['1_selection_amount'] + (1 - p1['1_flatten_extra_channels']) * p2['len_channels_scaler'] * original_channels_out}  )  # Adjust selection amount for classifier})  
+                                    
+                                    if exp_config.get('square_arc', True):
+                                        custom_update_dict( p1, {'1_num_transf' : p1['1_paralel'] } )
+                                        custom_update_dict( p2, {'num_transf'   : p2['paralel']   } )
+
                                     config_dataset = Aux_Latents[config]
                                     shape2 = config_dataset[-1]  # Shape of one sample in the test set
-                                    print("Shape2:", shape2)
+                                    print("Shape2:", shape2, "1_channels_out:", p1['1_channels_out'])
+
+                                    hidden_size = shape2[-1] if not exp_config['augmenting'] else shape2[-1] * shape2[-2] * shape2[-3]
+                                    p2.update( {'hidden_size' : hidden_size } )
+                                    print("Updated p2 hidden_size:", p2['hidden_size'])
 
                                     model2 = quantum.vit.VisionTransformer(
                                         img_size=shape[-1], num_channels= 3, num_classes=exp_config['num_classes'],
-                                        patch_size=p2['patch_size'], hidden_size= shape2[-1], num_heads=p2['num_head'], Attention_N = p2['Attention_N'],
+                                        patch_size=p2['patch_size'], hidden_size= hidden_size, num_heads=p2['num_head'], Attention_N = p2['Attention_N'],
                                         num_transformer_blocks=p2['num_transf'], attention_selection= p2['attention_selection'], special_cls = p2['special_cls'], 
                                         mlp_hidden_size=p2['mlp_size'], quantum_mlp = False, dropout = make_dropout(p2['dropout']), channels_last=exp_config['channels_last'], quantum_classification = False,
-                                        paralel = p2['paralel'] , RD = p2['RD'], q_stride = p2['q_stride'], connectivity = 'chain', patch_embedding_required = 'false'
+                                        paralel = p2['paralel'] , RD = p2['RD'], q_stride = p2['q_stride'], connectivity = 'chain', patch_embedding_required = 'flatten' if exp_config['augmenting'] else 'false'
                                     )
 
                                     print('\nTraining second model: classifier ViT on latent representations\n')
@@ -466,7 +520,7 @@ def make_experiment_selformer(exp_config, p1_base, p2_base, all_iter={}, m1_iter
                                         mlp=p2['mlp_size'], wd=p2['weight_decay'], patience= p2['patience'], scheduler_factor=p2['scheduler_factor'], 
                                         autoencoder=False, augmentation_prob = p2['augmentation_prob'], val_train_pond=p2['val_train_pond']
                                     )
-                                    
+
                                     # Save results
                                     row = {
                                         'idx': idx, 

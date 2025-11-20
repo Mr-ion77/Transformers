@@ -5,14 +5,16 @@ if __name__ == "__main__":
     
     # 1. Define Base Configs
     exp_config_base = {
-        'experiment_id': 'ReDo_transformer_test_3x3',
-        'experiment_name': 'Test ViT Experiment',
+        'experiment_id': 'special_cls_variants',
+        'experiment_name': 'Full vs Partial vs None',
         'B': 256,
         'N': 100, # Num epochs
         'num_experiments': 20,
         'num_classes': 7,
+        'square' : True,
         'channels_last': False,
-        'device': 'cuda' if torch.cuda.is_available() else 'cpu',
+        'device': 'cuda:0' if torch.cuda.is_available() else 'cpu',
+        'second_at_a_time' : False,
         'send_telegram': True
     }
 
@@ -20,13 +22,13 @@ if __name__ == "__main__":
         'patch_size': 4,
         'num_head': 4,
         'Attention_N': 2,
-        'num_transf': 3,
+        'num_transf': 2,
         'selection_amount': 25,
-        'special_cls': True,
+        'special_cls': 'full_projection',
         'mlp_size': 5,
         'quantum': False,
         'dropout': 0.225,
-        'paralel': 3,
+        'paralel': 2,
         'attention_selection': 'filter',
         'RD': 1,
         'q_stride': 1,
@@ -46,7 +48,7 @@ if __name__ == "__main__":
     }
     
     model_iter = {
-        'special_cls': [False],
+        'special_cls': ['full_projection', 'part_projection', 'false'],
     }
 
     graph_columns = ['special_cls', 'test_auc']

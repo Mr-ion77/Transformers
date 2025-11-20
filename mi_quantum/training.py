@@ -23,7 +23,6 @@ from torch.optim.lr_scheduler import ReduceLROnPlateau
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 
-
 class CustomRotation(nn.Module):
     """
     A custom wrapper for kornia's rotate function that accepts padding_mode.
@@ -55,21 +54,24 @@ class CustomRotation(nn.Module):
         deg = self.degrees.to(x.device)
         if self.same_on_batch:
             # Generate ONE angle for the entire batch
-            angle = (torch.rand(1, device=x.device) * 2 - 1) * deg
+            angle =  random.choice( list(deg) ).clone().detach()
             # Repeat this angle for every item in the batch
             angle = angle.repeat(x.shape[0])
         else:
             # Generate a different angle for each item in the batch
-            angle = (torch.rand(x.shape[0], device=x.device) * 2 - 1) * deg
+            angle = (torch.rand(x.shape[0], device=x.device) * 2 - 1) * deg[0]
 
         # 2. Apply the functional rotation
         # T.rotate is the function that does the actual work
-        return T.rotate(
+        output = T.rotate(
             x, 
             angle, 
             mode='bilinear', 
             padding_mode=self.padding_mode
         )
+
+        assert output.shape == x.shape, f"Output shape {output.shape} does not match input shape {x.shape}"
+        return output
 
 
 def save_attention(output,image,dir,patch_size):
@@ -203,9 +205,8 @@ def train_and_evaluate(
     model: torch.nn.Module, train_dataloader: torch.utils.data.DataLoader, valid_dataloader: torch.utils.data.DataLoader,
     test_dataloader: torch.utils.data.DataLoader, num_classes: int, num_epochs: int, device: torch.device, mapping: bool = False, 
     learning_rate: float = 1e-4, res_folder: str = "results_cc", hidden_size: int = 12, patch_size: int = 4, num_heads: int = 1, 
-    dropout: dict = {'embedding_attn': 0.225, 'after_attn': 0.225, 'feedforward': 0.225, 'embedding_pos': 0.225}, num_transf: int = 1,
-    mlp: int = 1, wd: float = 0.1, verbose: bool = False, patience : int = -1, scheduler_factor : float = 0.98, autoencoder : bool = False, 
-    save_reconstructed_images : bool = False, augmentation_prob: float = 0.5, val_train_pond = 1) -> None:
+    dropout: float = 0.0225, num_transf: int = 1, mlp: int = 1, wd: float = 0.1, verbose: bool = False, patience : int = -1, scheduler_factor : float = 0.98, 
+    autoencoder : bool = False, save_reconstructed_images : bool = False, augmentation_prob: float = 0.5, val_train_pond = 1) -> None:
     """Trains the given model on the given dataloaders for the given parameters"""
     start_event = torch.cuda.Event(enable_timing=True)
     end_event = torch.cuda.Event(enable_timing=True)
@@ -231,9 +232,8 @@ def train_and_evaluate(
 
     if augmentation:
         aug_pipeline = nn.Sequential(
-            # Make sure you've defined or imported CustomRotation
-            CustomRotation(degrees=45, same_on_batch=True, padding_mode='border', prob = augmentation_prob),
-            K.RandomHorizontalFlip(p=augmentation_prob, same_on_batch=True)
+            K.RandomHorizontalFlip(p=augmentation_prob, same_on_batch=True),
+            K.RandomVerticalFlip(p=augmentation_prob, same_on_batch=True)
         ).to(device)
 
     if autoencoder:
@@ -260,6 +260,13 @@ def train_and_evaluate(
             
             for inputs, labels, *ind in train_dataloader:
 
+                nonzerodim = True
+                for d in inputs.shape:
+                    if d == 0:
+                        nonzerodim = False
+                        break
+                assert nonzerodim, f"Input has zero dimension in shape {inputs.shape}"
+
                 inputs, labels = inputs.to(device), labels.to(device) 
                 if not autoencoder:               
                     if num_classes == 2:
@@ -281,7 +288,6 @@ def train_and_evaluate(
                 if augmentation:
 
                     D = inputs.ndim
-
                     if D == 5:
                         B, S, C, H, W = inputs.shape
                         inputs = inputs.view( (B*S, C, H, W) )
@@ -290,6 +296,7 @@ def train_and_evaluate(
 
                     if D == 5:
                         inputs = inputs.view( (B, S, C, H, W) )
+        
                 
                 outputs = model(inputs)
 
