@@ -15,7 +15,7 @@ p1 = {
 
 p2 = {
     'learning_rate': 0.00025, 'hidden_size': 768, 'dropout': 0.3,
-    'quantum' : False, 'num_head': 8, 'Attention_N' : 2, 'num_transf': 2, 'mlp_size': 5, 'patch_size': 16, 'weight_decay': 1e-4, 'attention_selection': 'filter',
+    'quantum' : False, 'num_head': 8, 'Attention_N' : 2, 'num_transf': 2, 'mlp_size': 10, 'patch_size': 16, 'weight_decay': 1e-4, 'attention_selection': 'filter',
     'selection_amount': 98, 'RD': 1, 'special_cls' : 'none', 'paralel': 1, 'patience': -1, 'scheduler_factor': 0.955, 'q_stride': 1, 'augmentation_prob' : 1,
     'val_train_pond' : 1, 'len_channels_scaler' : 1
 }
@@ -34,10 +34,10 @@ exp_config = {
     'B'                     : 128,
     'special_batch_for_data': False,
     'rewind_channels'       : False,
-    'N1'                    : 100,
+    'N1'                    : 1,
     'N2'                    : 100,
     'q_config'              : {'none'},
-    'device'                : torch.device("cuda:1" if torch.cuda.is_available() else "cpu"),
+    'device'                : torch.device("cuda:0" if torch.cuda.is_available() else "cpu"),
     'second_at_a_time'      : False,
     'augmenting'            : False,
 }

@@ -685,7 +685,7 @@ class VisionTransformer(nn.Module):
 
 
         # CLS token (Even if we haven't applied patch embedding here, we assume the input x doesn't have the cls token included yet)
-        #print(f"Shapes, x and cls: {x.shape}, {self.cls_token.expand(x.shape[0], -1, -1).shape}")
+        print(f"Shapes, x and cls: {x.shape}, {self.cls_token.expand(x.shape[0], -1, -1).shape}")
         x = torch.cat((self.cls_token.expand(x.shape[0], -1, -1), x), dim=1)
         # x.shape = (batch_size, num_steps, hidden_size)
 
