@@ -165,24 +165,6 @@ class MultiheadSelfAttention(nn.Module):
         self.dropout = nn.Dropout(dropout['embedding_attn'])
         self.o_proj = nn.Linear(embed_dim, embed_dim)
 
-    def rank_patches_by_attention(attn: torch.Tensor) -> torch.Tensor:
-        """
-        Ranks image patches by the total attention they receive.
-
-        """
-        # Average over heads: (B, T, T)
-        attn_mean = attn.mean(dim=1)
-
-        # Total attention received by each token: sum over the source positions (axis=-2)
-        # attention_received[b, j] = sum over i of attn[b, i, j]
-        attention_received = attn_mean.sum(dim=1)  # shape: (B, T)
-
-        # Sort patches by total attention received, descending
-        sorted_indices = attention_received.argsort(dim=1, descending=True)  # shape: (B, T)
-
-        return sorted_indices
-
-
 
     def forward(self, x):
         batch_size, seq_len, embed_dim = x.shape
@@ -535,90 +517,106 @@ class VisionTransformer(nn.Module):
         
         return gathered_patches, sel_patch_indices_0_based
 
-    def reconstruct_image_from_patches(self, selected_patches_flat, sel_patch_indices_0_based, original_image_shape):
-        """
-        Reconstructs an image from a pre-selected sequence of flat patches.
-        This version is more efficient if you already have the selected *pixel* patches
-        and just need to perform the "fold" (reconstruction) operation.
 
+    def reconstruct_image_from_patches(self, selected_patches_flat, sel_patch_indices_0_based, original_image_shape, quantum_channels=0, originals = True):
+        """
+        Reconstructs multiple image variations (Quantum Channels) from a sequence of flat patches.
+        
         Args:
             selected_patches_flat (torch.Tensor): The *pixel* data of selected patches.
-                                    Shape: (batch_size, q_lr, C * patch_size**2)
+                                                Shape: (B, q_lr * Q, C * patch_size**2)
             sel_patch_indices_0_based (torch.Tensor): 0-based indices of selected patches.
-                                        Shape: (batch_size, q_lr)
-            original_image_shape (tuple or list): Shape of the original image (B, C, H, W).
-        
-        Assumes 'self' has access to 'self.patch_size' (e.g., 16).
+                                                    These indices are shared across all Q channels.
+                                                    Shape: (B, q_lr)
+            original_image_shape (tuple): Shape of the original image (C, H, W) or (B, C, H, W).
+            quantum_channels (int): The number of quantum variations (Q). Defaults to 0.
+            originals (bool) : are the original patches included?. Defaults to True.
         
         Returns:
-            torch.Tensor: The reconstructed image with selected patches in place
-                        and the rest as black. Shape: (B, C, H, W)
+            torch.Tensor: The reconstructed images. 
+                        Shape: (B, Q, C, H, W)
         """
-        
+
         # --- 1. Get Patch and Image Dimensions ---
         try:
             P_h, P_w = self.patch_size, self.patch_size
         except AttributeError:
             raise AttributeError("self.patch_size must be defined in your class.")
 
+        # Handle original_image_shape whether it comes as (C, H, W) or (B, C, H, W)
+        if len(original_image_shape) == 4:
+            C, H, W = original_image_shape[1], original_image_shape[2], original_image_shape[3]
+        else:
+            C, H, W = original_image_shape
+
         B = selected_patches_flat.shape[0]
-        C, H, W = original_image_shape
         grid_h = H // P_h
         grid_w = W // P_w
         num_patches_total = grid_h * grid_w
         
+        # Determine Q. If quantum_channels is passed as 0, we assume 1 (standard behavior)
+        assert quantum_channels + originals > 0, f"The amount of quantum channels ({quantum_channels}) + bool 'are originals included' ({originals}) must be greater than 0 "
+        Q = int( quantum_channels + originals)
+        
+        # Calculate q_lr based on the indices provided
         q_lr = sel_patch_indices_0_based.size(1)
         patch_pixel_dim = selected_patches_flat.size(2)
 
-        # --- Sanity Check ---
+        # --- Sanity Checks ---
         expected_dim = C * P_h * P_w
         if patch_pixel_dim != expected_dim:
+            raise ValueError(f"Patch dim {patch_pixel_dim} != Expected {expected_dim}")
+        
+        if selected_patches_flat.shape[1] != q_lr * Q:
             raise ValueError(
-                f"Input patch dimension ({patch_pixel_dim}) does not match "
-                f"Expected C * P_h * P_w ({expected_dim}). "
-                "This function expects flat *pixel* data, not embedded data (unless embed_dim == C*P*P)."
+                f"Input patch sequence length ({selected_patches_flat.shape[1]}) "
+                f"does not match expected length q_lr * Q ({q_lr} * {Q} = {q_lr*Q})."
             )
 
-        # --- 2. Reshape selected patches into (B, q_lr, C, P, P) ---
-        # This is the data we want to scatter
-        try:
-            selected_pixel_patches = selected_patches_flat.view(B, q_lr, C, P_h, P_w)
-        except RuntimeError as e:
-            raise RuntimeError(
-                f"Failed to reshape selected_patches_flat from "
-                f"({B}, {q_lr}, {patch_pixel_dim}) to ({B}, {q_lr}, {C}, {P_h}, {P_w}). "
-                f"Check if C, P_h, P_w match the flat dimension. Error: {e}"
-            )
+        # --- 2. Prepare Data for Vectorized Reconstruction ---
+        # We treat (Batch * Quantum_Channels) as a single large batch for efficiency.
+        
+        # Reshape Patches: (B, q_lr * Q, flat) -> (B, Q, q_lr, flat) -> (B * Q, q_lr, flat)
+        # Then to spatial: -> (B * Q, q_lr, C, P, P)
+        flat_patches_reshaped = selected_patches_flat.view(B, Q, q_lr, patch_pixel_dim)
+        flat_patches_merged = flat_patches_reshaped.view(B * Q, q_lr, patch_pixel_dim)
+        
+        pixel_patches = flat_patches_merged.view(B * Q, q_lr, C, P_h, P_w)
 
-        # --- 3. Create a "Canvas" of Patches (all zeros) ---
-        # This will hold the selected patches at their correct 1D index
-        # Shape: (B, num_patches_total, C, P, P)
+        # Expand Indices: (B, q_lr) -> (B, 1, q_lr) -> (B, Q, q_lr) -> (B * Q, q_lr)
+        # We repeat the indices because every Quantum channel uses the same spatial positions.
+        indices_expanded = sel_patch_indices_0_based.unsqueeze(1).expand(-1, Q, -1)
+        indices_merged = indices_expanded.reshape(B * Q, q_lr)
+
+        # --- 3. Create Canvas and Scatter ---
+        # Canvas Shape: (B * Q, Total_Patches_In_Image, C, P, P)
         canvas_patches = torch.zeros(
-            (B, num_patches_total, C, P_h, P_w), 
+            (B * Q, num_patches_total, C, P_h, P_w), 
             device=selected_patches_flat.device, 
             dtype=selected_patches_flat.dtype
         )
 
-        # --- 4. Place Selected Patches onto the Canvas using scatter_ ---
-        # We scatter `selected_pixel_patches` into `canvas_patches` along dim=1 (the N dim)
-        # using the indices `sel_patch_indices_0_based`
+        # Prepare indices for scatter_. 
+        # (B*Q, q_lr) -> (B*Q, q_lr, 1, 1, 1) -> (B*Q, q_lr, C, P, P)
+        idx_scatter = indices_merged.view(B * Q, q_lr, 1, 1, 1).expand(-1, -1, C, P_h, P_w)
         
-        # We need to expand the indices for the scatter operation
-        # (B, q_lr) -> (B, q_lr, 1, 1, 1) -> (B, q_lr, C, P_h, P_w)
-        idx_scatter = sel_patch_indices_0_based.view(B, q_lr, 1, 1, 1).expand(-1, -1, C, P_h, P_w)
-        
-        canvas_patches.scatter_(dim=1, index=idx_scatter, src=selected_pixel_patches)
+        # Scatter the pixel data onto the canvas
+        canvas_patches.scatter_(dim=1, index=idx_scatter, src=pixel_patches)
 
-        # --- 5. "Fold" the Patches Back into an Image ---
-        # First, reshape canvas_patches back to the format Fold expects:
-        # (B, N, C*P*P) -> (B, C*P*P, N)
-        canvas_flat = canvas_patches.view(B, num_patches_total, expected_dim).transpose(1, 2)
+        # --- 4. Fold into Images ---
+        # Reshape for Fold: (B*Q, N, flat) -> (B*Q, flat, N)
+        canvas_flat = canvas_patches.view(B * Q, num_patches_total, expected_dim).transpose(1, 2)
         
-        # Fold stitches the patches back together
         fold = nn.Fold(output_size=(H, W), kernel_size=(P_h, P_w), stride=(P_h, P_w))
-        reconstructed_image = fold(canvas_flat)
         
-        return reconstructed_image
+        # Result shape: (B * Q, C, H, W)
+        reconstructed_combined = fold(canvas_flat)
+        
+        # --- 5. Final Reshape ---
+        # Separate Batch and Quantum dimensions: (B, Q, C, H, W)
+        reconstructed_final = reconstructed_combined.view(B, Q, C, H, W)
+
+        return reconstructed_final
 
 
     def get_selected_pixel_patches(self, x_image, sel_patch_indices_0_based):

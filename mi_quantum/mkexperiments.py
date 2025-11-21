@@ -19,7 +19,7 @@ import json
 import pandas as pd
 import mi_quantum.quantum as quantum  
 import mi_quantum.data as data
-from mi_quantum.data_to_qdata import preprocess_and_save, cut_extra_channels_from_latents
+from mi_quantum.data import preprocess_and_save, cut_extra_channels_from_latents
 import mi_quantum.training as training
 # ... other imports ...
 from TelegramBot import SendToTelegram
@@ -297,7 +297,7 @@ def make_experiment_selformer(exp_config, p1_base, p2_base, all_iter={}, m1_iter
     """
     
     root_id = exp_config['experiment_id']
-    all_iter_counter = 1
+    all_iter_counter = 0
     columns = ['idx', 'q_config', 'channels_out', 'latent_shape', '2_selection_amount'] + list(all_iter.keys()) + list(m1_iter.keys()) + list(data_iter.keys()) + list(m2_iter.keys()) + DEFAULT_COLUMNS + ['#params_sel', '#params_class']
     try:
         columns.remove('#params')         # Remove unused column (Used in transformer experiments)

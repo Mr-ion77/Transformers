@@ -13,6 +13,8 @@ from PIL import Image
 import numpy as np
 import matplotlib.pyplot as plt
 
+device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
+
 
 def save_attention(output,image,dir,patch_size=14):
     attentions = output.attentions[-1] # we are only interested in the attention maps of the last layer
