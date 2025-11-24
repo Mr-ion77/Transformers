@@ -48,7 +48,7 @@ class QuantumKernel(nn.Module):
         
         if self.ancilla > 0:
             ancilla_tensor = torch.zeros(*x.shape[:-1], self.ancilla, device=x.device, dtype=x.dtype)
-            x = torch.cat([x, ancilla_tensor], dim=-1)
+            x = torch.cat([ x, ancilla_tensor], dim=-1)
 
         circuit_out = self.circuit(x)
 
@@ -134,6 +134,7 @@ class QuantumConv2D(nn.Module):
             return full_out_by_channel
         else:
             return output[:,0,:,:] # (B, H_out, W_out)
+        
     
 class QuantumConv1D(nn.Module):
     def __init__(self, window_size=3, stride=1, padding=0, channels_out = [4], graph= 'chain', entangle_method = 'CNOT', ancilla = 1, pad_filler = 'median'):

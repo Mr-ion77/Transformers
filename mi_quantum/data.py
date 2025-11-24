@@ -2,7 +2,10 @@ import os
 import torch
 import numpy as np
 import torchvision.transforms as transforms
+from pathlib import Path
+import json
 import medmnist
+from tqdm import tqdm
 from torch.utils.data import Subset, Dataset, DataLoader, TensorDataset
 num_channels = 3
 
@@ -335,8 +338,8 @@ def preprocess_and_save(
                 # Loop over each kernelsolution layer
                 for q_idx, qlayer in enumerate(kernels_list):
 
-                    not_none_bool = kernels_names[q_idx] != 'none'
-                    
+                    not_none_bool = kernels_names[q_idx] != 'none' 
+
                     # --- THIS IS THE MODIFIED BLOCK ---
                     if mode == 'standard':
                         # Original behavior
@@ -350,17 +353,18 @@ def preprocess_and_save(
                              raise ValueError("num_channels must be set for 'by_selected_patches' mode")
 
                         # 1. Get patches from model1
-                        selected_patches = model1.get_patches_by_attention(x=images, paralel_branch=0)[0]
+                        aux_patches, selected_indices = model1.get_patches_by_attention(x=images, paralel_branch=0) #Until here everything okay
+
+                        # aux_patches = model1.get_selected_pixel_patches(images, selected_indices, quantum_channels = 0, originals = concatenate_original)
                         # selected_patches shape: (B_img, 1_selection_amount, C, patch_size, patch_size)
                         # 2. Reshape patches to fit kernelsolution input
-                        aux_patches = selected_patches.view(-1, num_channels, p1['1_patch_size'], p1['1_patch_size'])  # Shape: (B * num_patches, C, patch_size, patch_size)
+                        aux_patches = aux_patches.view(-1, num_channels, p1['1_patch_size'], p1['1_patch_size'])  # Shape: (B * num_patches, C, patch_size, patch_size)
 
                         aux_shape = (B_img, p1['1_selection_amount'], -1, p1['1_patch_size'], p1['1_patch_size'])
                         # 3. Apply the current kernelsolution layer and undo the change
-                        aux_patch_outs = qlayer(aux_patches).view(aux_shape) # Shape: (B , num_patches, C * q, H_out, W_out) # C_out = C * (number of qubits measured = q)
+                        aux_patch_outs = qlayer(aux_patches).view(aux_shape) # Shape: (B , num_patches, C * q, H_out, W_out) # C_out = C * (number of qubits measured = q) .permute(0, 2, 1, 3, 4).contiguous().view(B, q * C, H_out, W_out)
 
                         measured_qubits = aux_patch_outs.shape[-3] // num_channels # q = (C * q) /c, in theory haha
-
 
                         if concatenate_original and not_none_bool:
                             aux_patch_outs = torch.cat([aux_patches.view(aux_shape), aux_patch_outs], dim = 2) #Concatenate original channels to quantum processed ones

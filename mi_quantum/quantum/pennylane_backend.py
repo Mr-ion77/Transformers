@@ -73,7 +73,10 @@ class QuantumLayer(torch.nn.Module):
         # Quantum circuit
         @qml.qnode(dev, interface="torch", diff_method="backprop")
         def circuit_(inputs, weights):
-
+            
+            print (( inputs > 1).any(),(inputs < 0).any())
+   
+            inputs = torch.clamp(inputs, min=0, max=1)
             qml.AngleEmbedding(inputs, wires=range(num_qubits), rotation='Y')
 
             for i, pair in enumerate(self.graph): 

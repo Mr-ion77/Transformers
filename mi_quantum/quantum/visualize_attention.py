@@ -21,6 +21,7 @@ import mi_quantum.quantum as quantum
 import mi_quantum.data as data
 from mi_quantum.data import preprocess_and_save, cut_extra_channels_from_latents
 import mi_quantum.training as training
+import torchvision.utils as vutils
 
 # Hyperparameters:
 
@@ -28,7 +29,7 @@ import mi_quantum.training as training
 p1 = {
     '1_learning_rate': 0.0025, '1_hidden_size': 48, '1_dropout': 0.3,
     '1_quantum' : False, '1_num_head': 4, '1_Attention_N' : 2, '1_num_transf': 2, '1_mlp_size': 5, '1_patch_size': 4, '1_weight_decay': 1e-7, '1_attention_selection': 'none', 
-    '1_selection_amount': 20, '1_RD': 1, '1_connectivity' : 'king' ,'1_entangle_method' : 'CRX', '1_special_cls' : 'none', '1_paralel': 1, '1_patience': -1, 
+    '1_selection_amount': 49, '1_RD': 1, '1_connectivity' : 'king' ,'1_entangle_method' : 'CRX', '1_special_cls' : 'none', '1_paralel': 1, '1_patience': -1, 
     '1_scheduler_factor': 0.985, '1_q_stride': 1, '1_ancilla' : 0, '1_channels_out' : list(range(9)), '1_augmentation_prob' : 0, '1_val_train_pond' : 1,
     '1_flatten_extra_channels' : False, '1_quanv_kernel_size' : 3
 }
@@ -36,7 +37,7 @@ p1 = {
 p2 = {
     'learning_rate': 0.0025, 'hidden_size': 48, 'dropout': 0.3,
     'quantum' : False, 'num_head': 4, 'Attention_N' : 2, 'num_transf': 2, 'mlp_size': 5, 'patch_size': 4, 'weight_decay': 1e-7, 'attention_selection': 'filter',
-    'selection_amount': 20, 'RD': 1, 'special_cls' : 'none', 'paralel': 2, 'patience': -1, 'scheduler_factor': 0.985, 'q_stride': 1, 'augmentation_prob' : 0,
+    'selection_amount': 49, 'RD': 1, 'special_cls' : 'none', 'paralel': 2, 'patience': -1, 'scheduler_factor': 0.985, 'q_stride': 1, 'augmentation_prob' : 0,
     'val_train_pond' : 1, 'len_channels_scaler' : 2
 }
 
@@ -44,7 +45,7 @@ exp_config = {
     'channels_last'         : False,         # True if last dimension of datasets tensors match channels dimension
     'repeat_selector'       : False,         # True to train autoencoder each time for more variability
     'send_telegram'         : True,
-    'num_experiments'       : 20,
+    'num_experiments'       : 1,
     'num_classes'           : 7,
     'trained_selector_once' : False,
     'pixels'                : 28,
@@ -54,8 +55,8 @@ exp_config = {
     'B'                     : 256,
     'special_batch_for_data': False,
     'rewind_channels'       : False,
-    'N1'                    : 100,
-    'N2'                    : 100,
+    'N1'                    : 1,
+    'N2'                    : 5,
     'q_config'              : {'patchwise','none'},
     'device'                : torch.device("cuda:0" if torch.cuda.is_available() else "cpu"),
     'second_at_a_time'      : False,
@@ -183,11 +184,17 @@ Kernels = {
                             )
             }
 
+Kernels2 = { 'none' : torch.nn.Identity() }
+
+# train_dataset = torch.load("../QTransformer_Results_and_Datasets/selformer_results/quantum_datasets/quantum_train_datasetpatchwise.pt", weights_only=True)
+# val_dataset = torch.load("../QTransformer_Results_and_Datasets/selformer_results/quantum_datasets/quantum_val_datasetpatchwise.pt", weights_only=True)
+# test_dataset = torch.load("../QTransformer_Results_and_Datasets/selformer_results/quantum_datasets/quantum_test_datasetpatchwise.pt", weights_only=True)
+
 Latents = preprocess_and_save(
     B = exp_config['B'],
     DataLoaders = DataLoaders,
-    kernels = Kernels,
-    save_path = f"../../../QTransformer_Results_and_Datasets/selformer_results/quantum_datasets",
+    kernels = Kernels2,
+    save_path = f"../QTransformer_Results_and_Datasets/selformer_results/quantum_datasets",
     mode = 'by_selected_patches',
     model1 = model1,
     p1 = p1,
@@ -195,14 +202,15 @@ Latents = preprocess_and_save(
     flatten_extra_channels = p1['1_flatten_extra_channels'],
     device = exp_config['device'],
     flatten = not exp_config['augmenting'], 
-    concatenate_original = exp_config.get('concatenate_original', False)
+    concatenate_original = exp_config.get('concatenate_original', False) # In this case true
 )
+config = 'none'
+config_dataset =  Latents[config] # data.create_dataloaders(data_dir = None, batch_size= 256, channels_last= False, shuffle = False, tensors = [train_dataset, val_dataset, test_dataset], transforms={'train': None, 'val': None, 'test': None}) #
+shape2 = config_dataset[-1] #
 
-config = 'patchwise'
-config_dataset = Latents[config]
-shape2 = config_dataset[-1]  # Shape of one sample in the test set
 print("Shape2:", shape2, "1_channels_out:", p1['1_channels_out'])
 hidden_size = shape2[-1] if not exp_config['augmenting'] else shape2[-1] * shape2[-2] * shape2[-3]
+
 
 model2 = quantum.vit.VisionTransformer(
     img_size=shape[-1], num_channels= 3, num_classes=exp_config['num_classes'],
@@ -212,12 +220,12 @@ model2 = quantum.vit.VisionTransformer(
     paralel = p2['paralel'] , RD = p2['RD'], q_stride = p2['q_stride'], connectivity = 'chain', patch_embedding_required = 'flatten' if exp_config['augmenting'] else 'false'
 )
 
-print('\nTraining second model: classifier ViT on latent representations\n')
-print(f'QUANTUM SETTING IS: {config} and current lr is: {p2["learning_rate"]}')
+
+latent_train_dl, latent_val_dl, latent_test_dl = config_dataset[:-1]
 
 # Train second model
 test_auc, test_acc, val_auc, val_acc, train_auc, train_acc, params = training.train_and_evaluate(
-    model2, config_dataset[0], config_dataset[1], config_dataset[2], num_classes=exp_config['num_classes'],
+    model2, latent_train_dl, latent_val_dl, latent_test_dl, num_classes=exp_config['num_classes'],
     learning_rate=p2['learning_rate'], num_epochs=exp_config['N2'], device=exp_config['device'], mapping=False,
     res_folder=str(save_path), hidden_size=p2['hidden_size'], dropout=make_dropout(p2['dropout']),
     num_heads=p2['num_head'], patch_size=p2['patch_size'], num_transf=p2['num_transf'],
@@ -227,13 +235,47 @@ test_auc, test_acc, val_auc, val_acc, train_auc, train_acc, params = training.tr
 
 # Now let's what's happening with the attentions!
 
-for i, dl in enumerate([config_dataset[:-1]]):
+for i, dl in enumerate(config_dataset[:-1]):
 
     quantum_percentage = []
+    first = True
      
-    for imgs, labels, idx in dl:
-        _ , attention_for_images = model2.transformer_blocks[0][0].attn(imgs)
+    for imgs, labels, idxs in dl:
+        _ , attention_for_images = model2.transformer_blocks[0][0].attn(imgs.to(exp_config['device']))
         indices_by_attention = rank_patches_by_attention(attention_for_images)
         mask = (indices_by_attention >= p1['1_selection_amount'])
-        quantum_percentage.append( torch.sum(  mask ) / ( p1['1_selection_amount'] *))
+        quantum_percentage.append( torch.sum(  mask ) / ( p1['1_selection_amount'] * (1+len(p1['1_channels_out'])) * imgs.shape[0]))
+
+    print(f"Split {i} has an average selection of quantum patches of {sum(quantum_percentage)/len(quantum_percentage)}")
+
+# Now let's save some images (last batch suffices)
+
+
+imgs, _, _ = next(iter(test_dl))
+B, C, H, W, Q = *imgs.shape, 2
+
+
+latent_imgs, _, _ = next(iter(latent_test_dl))
+_, indices = model1.get_patches_by_attention(imgs.to(exp_config['device']))
+reconstructed_imgs = model1.reconstruct_image_from_patches(latent_imgs, indices, shape, Q-1, originals = True )
+
+permuted_imgs = reconstructed_imgs.permute(0, 2, 3, 1, 4)
+    
+final_imgs = permuted_imgs.reshape(B, C, H, Q * W)
+
+print(f"New shape:      {final_imgs.shape}")
+
+# 3. Saving the Results
+
+# Create output directory
+os.makedirs('../QTransformer_Results_and_Datasets/selformer_results/quantum_datasets/output_images', exist_ok=True)
+
+# Option B: Save each element in the batch individually
+for i in range(B):
+    filename = f"../QTransformer_Results_and_Datasets/selformer_results/quantum_datasets/output_images/batch_element_{i}.png"
+    vutils.save_image(final_imgs[i], filename, normalize=True)
+
+
+
+
 
