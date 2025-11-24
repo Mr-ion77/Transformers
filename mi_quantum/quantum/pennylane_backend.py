@@ -73,10 +73,9 @@ class QuantumLayer(torch.nn.Module):
         # Quantum circuit
         @qml.qnode(dev, interface="torch", diff_method="backprop")
         def circuit_(inputs, weights):
-            
-            print (( inputs > 1).any(),(inputs < 0).any())
    
-            inputs = torch.clamp(inputs, min=0, max=1)
+            inputs = torch.clamp(inputs, min=1e-6, max=1)
+            inputs = inputs * np.pi
             qml.AngleEmbedding(inputs, wires=range(num_qubits), rotation='Y')
 
             for i, pair in enumerate(self.graph): 
@@ -87,7 +86,7 @@ class QuantumLayer(torch.nn.Module):
                 elif self.entangle_method == 'SEL': # Stands for StronglyEntanglingLayers
                     qml.StronglyEntanglingLayers(weights, wires=range(num_qubits), ranges = [1])
 
-            return [qml.expval(qml.PauliZ(i)) for i in range(num_qubits)]
+            return [ qml.expval(qml.PauliZ(i)) for i in range(num_qubits)]
 
         weight_shape =  (1, num_qubits, 3) if self.entangle_method == 'SEL' else (1,)
 

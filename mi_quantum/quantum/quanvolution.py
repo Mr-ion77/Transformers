@@ -50,7 +50,7 @@ class QuantumKernel(nn.Module):
             ancilla_tensor = torch.zeros(*x.shape[:-1], self.ancilla, device=x.device, dtype=x.dtype)
             x = torch.cat([ x, ancilla_tensor], dim=-1)
 
-        circuit_out = self.circuit(x)
+        circuit_out = (1+self.circuit(x))/2 # Normalize between 0 and 1
 
         return circuit_out[...,  self.channels_out]
     

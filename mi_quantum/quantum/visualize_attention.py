@@ -186,10 +186,6 @@ Kernels = {
 
 Kernels2 = { 'none' : torch.nn.Identity() }
 
-# train_dataset = torch.load("../QTransformer_Results_and_Datasets/selformer_results/quantum_datasets/quantum_train_datasetpatchwise.pt", weights_only=True)
-# val_dataset = torch.load("../QTransformer_Results_and_Datasets/selformer_results/quantum_datasets/quantum_val_datasetpatchwise.pt", weights_only=True)
-# test_dataset = torch.load("../QTransformer_Results_and_Datasets/selformer_results/quantum_datasets/quantum_test_datasetpatchwise.pt", weights_only=True)
-
 Latents = preprocess_and_save(
     B = exp_config['B'],
     DataLoaders = DataLoaders,

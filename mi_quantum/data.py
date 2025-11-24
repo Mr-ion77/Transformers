@@ -260,7 +260,7 @@ def preprocess_and_save(
     num_channels = None, 
     flatten_extra_channels = False,
     p = None, 
-    device = None,
+    device = 'cpu',
     flatten = True,
     concatenate_original = False
 ):
@@ -338,6 +338,8 @@ def preprocess_and_save(
                 # Loop over each kernelsolution layer
                 for q_idx, qlayer in enumerate(kernels_list):
 
+                    qlayer.to(device)
+                    images.to(device)
                     not_none_bool = kernels_names[q_idx] != 'none' 
 
                     # --- THIS IS THE MODIFIED BLOCK ---
@@ -367,9 +369,8 @@ def preprocess_and_save(
                         measured_qubits = aux_patch_outs.shape[-3] // num_channels # q = (C * q) /c, in theory haha
 
                         if concatenate_original and not_none_bool:
-                            aux_patch_outs = torch.cat([aux_patches.view(aux_shape), aux_patch_outs], dim = 2) #Concatenate original channels to quantum processed ones
+                            aux_patch_outs = torch.cat([aux_patches.view(aux_shape), aux_patch_outs.to(aux_patches.device)], dim = 2) #Concatenate original channels to quantum processed ones
 
-                        
                         if hasattr(qlayer, 'channels_out'):
                             # Check that the number of output channels matches the number of measured qubits
                             assert (len(qlayer.channels_out) ) == (measured_qubits), \
