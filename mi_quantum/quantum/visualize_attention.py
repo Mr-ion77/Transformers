@@ -244,32 +244,8 @@ for i, dl in enumerate(config_dataset[:-1]):
 
     print(f"Split {i} has an average selection of quantum patches of {sum(quantum_percentage)/len(quantum_percentage)}")
 
-# Now let's save some images (last batch suffices)
 
 
-imgs, _, _ = next(iter(test_dl))
-B, C, H, W, Q = *imgs.shape, 2
-
-
-latent_imgs, _, _ = next(iter(latent_test_dl))
-_, indices = model1.get_patches_by_attention(imgs.to(exp_config['device']))
-reconstructed_imgs = model1.reconstruct_image_from_patches(latent_imgs, indices, shape, Q-1, originals = True )
-
-permuted_imgs = reconstructed_imgs.permute(0, 2, 3, 1, 4)
-    
-final_imgs = permuted_imgs.reshape(B, C, H, Q * W)
-
-print(f"New shape:      {final_imgs.shape}")
-
-# 3. Saving the Results
-
-# Create output directory
-os.makedirs('../QTransformer_Results_and_Datasets/selformer_results/quantum_datasets/output_images', exist_ok=True)
-
-# Option B: Save each element in the batch individually
-for i in range(B):
-    filename = f"../QTransformer_Results_and_Datasets/selformer_results/quantum_datasets/output_images/batch_element_{i}.png"
-    vutils.save_image(final_imgs[i], filename, normalize=True)
 
 
 
