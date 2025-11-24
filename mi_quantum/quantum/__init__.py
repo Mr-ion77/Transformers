@@ -1,3 +1,3 @@
 from .vit import VisionTransformer
 from .mlp import MLP
-from. import quanvolution
+from . import quanvolution
