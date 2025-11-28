@@ -20,8 +20,6 @@ import kornia.constants as C
 from torch.optim.lr_scheduler import StepLR
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 
-device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
-
 
 class CustomRotation(nn.Module):
     """

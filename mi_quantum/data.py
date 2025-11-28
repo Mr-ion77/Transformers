@@ -111,7 +111,7 @@ def datasets_to_dataloaders( datasets, **dataloader_kwargs):
 
     dataloader_list = []
     for dataset in datasets:
-        dataloader_list.append( DataLoader(dataset['data'], shuffle= dataset['split'] == 'train', **dataloader_kwargs)     )
+        dataloader_list.append( DataLoader(dataset['data'], shuffle = dataset['split'] == 'train', **dataloader_kwargs)     )
 
     return *dataloader_list, shape
 
@@ -354,22 +354,27 @@ def preprocess_and_save(
                         if num_channels is None:
                              raise ValueError("num_channels must be set for 'by_selected_patches' mode")
 
+                        C, P = num_channels, p1['1_patch_size']
+
                         # 1. Get patches from model1
-                        aux_patches, selected_indices = model1.get_patches_by_attention(x=images, paralel_branch=0) #Until here everything okay
+                        aux_patches, selected_indices = model1.get_patches_by_attention(x=images, parallel_branch=0) #Until here everything okay
 
                         # aux_patches = model1.get_selected_pixel_patches(images, selected_indices, quantum_channels = 0, originals = concatenate_original)
                         # selected_patches shape: (B_img, 1_selection_amount, C, patch_size, patch_size)
                         # 2. Reshape patches to fit kernelsolution input
-                        aux_patches = aux_patches.view(-1, num_channels, p1['1_patch_size'], p1['1_patch_size'])  # Shape: (B * num_patches, C, patch_size, patch_size)
+                        aux_patches = aux_patches.view(-1, C, P, P)  # Shape: (B * num_patches, C, patch_size, patch_size)
 
-                        aux_shape = (B_img, p1['1_selection_amount'], -1, p1['1_patch_size'], p1['1_patch_size'])
+                        aux_shape = (B_img, p1['1_selection_amount'], -1, C * P * P)
                         # 3. Apply the current kernelsolution layer and undo the change
-                        aux_patch_outs = qlayer(aux_patches).view(aux_shape) # Shape: (B , num_patches, C * q, H_out, W_out) # C_out = C * (number of qubits measured = q) .permute(0, 2, 1, 3, 4).contiguous().view(B, q * C, H_out, W_out)
+                        aux_patch_outs = qlayer(aux_patches).reshape( aux_shape )
+                        measured_qubits = aux_patch_outs.shape[2] # q = (C * q) /c, in theory haha
 
-                        measured_qubits = aux_patch_outs.shape[-3] // num_channels # q = (C * q) /c, in theory haha
-
+                        # Shape: (B , num_patches, C * q, H_out, W_out) # C_out = C * (number of qubits measured = q) .permute(0, 2, 1, 3, 4).contiguous().view(B, q * C, H_out, W_out)
                         if concatenate_original and not_none_bool:
-                            aux_patch_outs = torch.cat([aux_patches.view(aux_shape), aux_patch_outs.to(aux_patches.device)], dim = 2) #Concatenate original channels to quantum processed ones
+                            aux_patch_outs = torch.cat([aux_patches.reshape(aux_shape), aux_patch_outs.to(aux_patches.device)], dim = 2) # Concatenate original patches to quantum processed ones
+                            # Shape: (B, num_patches, (q+1) , C * H_out * W_out)
+
+                        Q = measured_qubits + concatenate_original * not_none_bool
 
                         if hasattr(qlayer, 'channels_out'):
                             # Check that the number of output channels matches the number of measured qubits
@@ -380,46 +385,46 @@ def preprocess_and_save(
                             assert 1 == measured_qubits, f"The number of output channels (1) must equal the number of measured qubits ({measured_qubits})."
 
                         # 4. Determine reshape dimensions
-                        assert aux_patch_outs.shape[-1] * aux_patch_outs.shape[-2] == p1['1_patch_size']**2, \
-                                f"An internal shape mismatch error happened during the layer: {qlayer}:\n( { aux_patch_outs.shape[-1] * aux_patch_outs.shape[-2]}) must equal the square of the patchsize ({p1['1_patch_size']**2})."
+                        assert aux_patch_outs.shape[-1] // C == P**2, \
+                                f"An internal shape mismatch error happened during the layer: {qlayer}:\n( { aux_patch_outs.shape[-1] // C}) must equal the square of the patchsize ({P**2})."
                         
                         if flatten:
                             # Flatten spatial dimensions
                             if flatten_extra_channels:
-
                                 shape_to_reshape_toQ = (
                                     B_img, p1['1_selection_amount'], 
-                                    num_channels * ( concatenate_original * not_none_bool + measured_qubits) * p1['1_patch_size']**2
+                                    num_channels * Q * P**2
                                 )
                             else:
+                                aux_patch_outs = aux_patch_outs.transpose(1, 2)
                                 shape_to_reshape_toQ = (
-                                    B_img, p1['1_selection_amount'] * ( concatenate_original * not_none_bool + measured_qubits ),
-                                    num_channels * p1['1_patch_size']**2
+                                    B_img, p1['1_selection_amount'] * Q,
+                                    num_channels * P**2
                                 )
                         
                         else:
                             # Keep spatial dimensions
                             if flatten_extra_channels:
-
                                 shape_to_reshape_toQ = (
                                     B_img, p1['1_selection_amount'], 
-                                    num_channels * (measured_qubits + concatenate_original * not_none_bool), 
-                                    p1['1_patch_size'], p1['1_patch_size']
+                                    num_channels * Q, 
+                                    P, P
                                 )
                             else:
+                                aux_patch_outs = aux_patch_outs.transpose(1, 2)
                                 shape_to_reshape_toQ = (
-                                    B_img, p1['1_selection_amount'] * (measured_qubits + concatenate_original * not_none_bool),
-                                    num_channels, p1['1_patch_size'], p1['1_patch_size']
+                                    B_img, p1['1_selection_amount'] * Q,
+                                    num_channels, P, P
                                 )
 
-                        processed_data = aux_patch_outs.view(shape_to_reshape_toQ).cpu()
+                        processed_data = aux_patch_outs.reshape(shape_to_reshape_toQ).cpu()
 
                         if not flatten:
-                            assert list(processed_data.shape[-3:]) == [num_channels,p1['1_patch_size'],p1['1_patch_size']], \
-                                f"Reshape error: got shape {list(processed_data.shape[-3:])}, expected {[num_channels,p1['1_patch_size'],p1['1_patch_size']]}"
+                            assert list(processed_data.shape[-3:]) == [num_channels,P,P], \
+                                f"Reshape error: got shape {list(processed_data.shape[-3:])}, expected {[num_channels,P,P]}"
                         else:
-                            assert processed_data.shape[-1] == num_channels*p1['1_patch_size']*p1['1_patch_size'], \
-                                f"Reshape error: got shape {processed_data.shape[-1]}, expected {num_channels*p1['1_patch_size']*p1['1_patch_size']}"
+                            assert processed_data.shape[-1] == num_channels*P*P, \
+                                f"Reshape error: got shape {processed_data.shape[-1]}, expected {num_channels*P*P}"
 
                     else:
                         raise ValueError(f"Unknown mode: {mode}")
@@ -480,7 +485,8 @@ def preprocess_and_save(
             batch_size = B,
             channels_last = p.get('channels_last', False) if p else False,
             tensors = current_kernels_tensors,
-            transforms = {'train': None, 'val': None, 'test': None}
+            transforms = {'train': None, 'val': None, 'test': None},
+            shuffle = False
         )
 
         # Save the datasets using the new suffix
@@ -500,6 +506,9 @@ def preprocess_and_save(
         # MODIFICATION: Assign dataloaders to dictionary using key
         results[dataset_name_suffix] = Quantums
         print(f"Saved quantum datasets for kernels '{dataset_name_suffix}' at {save_path_quantum}")
+
+    for k in results.keys():
+        print(f"Kernel {k} got a final shape of {results[k][-1]}")
 
     return results
 

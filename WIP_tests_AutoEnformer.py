@@ -24,13 +24,13 @@ N2 = 125  # Number of epochs Classifier
 p1 = {
     'learning_rate': 5e-3, 'hidden_size': 48, 'dropout': {'embedding_attn': 0.125, 'after_attn': 0.175, 'feedforward': 0.125, 'embedding_pos': 0.125},
     'num_head': 1, 'Attention_N' : 2, 'num_transf': 1, 'mlp_size': 18, 'patch_size': 4, 'weight_decay': 1e-7, 'attention_selection': 'none', 'entangle_method' : 'CRX',
-    'paralel' : 1 ,'connectivity': 'king', 'RD': 1, 'patience': -1, 'scheduler_factor': 0.999, 'q_stride': 1, 'ancilla' : 0
+    'parallel' : 1 ,'connectivity': 'king', 'RD': 1, 'patience': -1, 'scheduler_factor': 0.999, 'q_stride': 1, 'ancilla' : 0
 }
 
 p2 = {
     'learning_rate': 0.0025, 'hidden_size': 18, 'dropout': {'embedding_attn': 0.275, 'after_attn': 0.275, 'feedforward': 0.275, 'embedding_pos': 0.275},
     'quantum' : False, 'num_head': 1, 'Attention_N' : 2, 'num_transf': 2, 'mlp_size': 18, 'patch_size': 4, 'weight_decay': 1e-7, 'attention_selection': 'filter',
-    'RD': 1, 'special_cls' : False, 'paralel': 2, 'patience': -1, 'scheduler_factor': 0.9995, 'q_stride': 1
+    'RD': 1, 'special_cls' : False, 'parallel': 2, 'patience': -1, 'scheduler_factor': 0.9995, 'q_stride': 1
 }
 
 NameOfExperiment = 'AutoEnformer results for None vs Vertical vs Quanvolution with CRX and no ancilla qubits'
@@ -117,7 +117,7 @@ if __name__ == "__main__":
                         patch_size=p1['patch_size'], hidden_size=p1['hidden_size'], num_heads=p1['num_head'],
                         num_transformer_blocks=p1['num_transf'], attention_selection=p1['attention_selection'],
                         mlp_hidden_size=p1['mlp_size'], Attention_N = p1['Attention_N'], dropout=p1['dropout'], 
-                        paralel = p1['paralel'], channels_last=False, q_stride= p1['q_stride']
+                        parallel = p1['parallel'], channels_last=False, q_stride= p1['q_stride']
                     )
 
                     # Train
@@ -176,7 +176,7 @@ if __name__ == "__main__":
                                 
                                 latent_aux = model1.get_latent_representation(images)
                                 
-                                for i in range(p1['paralel']):
+                                for i in range(p1['parallel']):
                                     if NoneBool:
                                         normal_outs.append( latent_aux[i] )   # FOR NEXT TEST ONLY WITH NORMAL
                                     if PatchBool:

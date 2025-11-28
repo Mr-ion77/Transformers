@@ -242,6 +242,7 @@ class FeedForward(nn.Module):
         super().__init__()
 
         self.quantum = quantum
+        print(f"Started a FeedForward Module with Quantum-setting: {self.quantum}")
         self.q_stride = q_stride
         self.mlp_hidden_size = mlp_hidden_size
 
@@ -301,7 +302,7 @@ class FeedForward(nn.Module):
 
 class TransformerBlock_Attention_Chosen_QMLP(nn.Module):
     def __init__(self, hidden_size, num_heads, mlp_hidden_size, hidden_size_out, Attention_N = 2, quantum_mlp = True, dropout={'embedding_attn': 0.225, 'after_attn': 0.225, 'feedforward': 0.225, 'embedding_pos': 0.225}, 
-                    attention_selection="filter", special_cls = False , q_stride = 4, connectivity = 'chain', RD = 1, img_size = 28, patch_size = 4):
+                    attention_selection="filter", q_lr = 49, special_cls = False , q_stride = 4, connectivity = 'chain', RD = 1, img_size = 28, patch_size = 4):
         super().__init__()
 
         self.attention_selection = attention_selection
@@ -310,6 +311,7 @@ class TransformerBlock_Attention_Chosen_QMLP(nn.Module):
         self.Attention_N = Attention_N
         self.special_cls = special_cls
         self.q_stride = q_stride
+        self.q_lr = q_lr
         # Attention components
         self.attn_norm = nn.LayerNorm(hidden_size)
         if self.Attention_N == 2:
@@ -327,10 +329,9 @@ class TransformerBlock_Attention_Chosen_QMLP(nn.Module):
                                     dropout = self.dropout, q_stride = self.q_stride,
                                     graph = connectivity)  # Quantum MLP
 
-        if attention_selection != "filter" or RD > 1:
+        if attention_selection not in ["filter", "none"] or RD > 1:
             self.mlp = nn.Linear(hidden_size, hidden_size_out) if attention_selection != "ID" else nn.Identity()
 
-        self.q_lr = (img_size * mlp_hidden_size) // patch_size  # Number of high-attention patches to select
         self.mlp_dropout = nn.Dropout(dropout['feedforward'])
 
         if attention_selection == "ID" and hidden_size != hidden_size_out:
@@ -394,7 +395,7 @@ class TransformerBlock_Attention_Chosen_QMLP(nn.Module):
 
         else:
             # If no attention selection, use standard MLP
-            y = self.mlp(y)
+            y = self.mlp_sel(y)
             y = self.mlp_dropout(y)
             return x + y, attn_map
 
@@ -403,7 +404,7 @@ class VisionTransformer(nn.Module):
     def __init__(self, img_size, num_channels, num_classes, patch_size, hidden_size, num_heads, num_transformer_blocks, mlp_hidden_size, Attention_N = 2,
                     quantum_mlp = False, quantum_classification = False, dropout= {'embedding_attn': 0.225, 'after_attn': 0.225, 'feedforward': 0.225, 'embedding_pos': 0.225}, 
                     channels_last=False, RD = 1, attention_selection = 'filter', selection_amount = None, special_cls = 'none',
-                    paralel = 1, q_stride = 1, connectivity = 'chain', patch_embedding_required = 'true'
+                    parallel = 1, parallel_mode = 'copy', q_stride = 1, connectivity = 'chain', patch_embedding_required = 'true'
                     ):
         super().__init__()
 
@@ -417,14 +418,29 @@ class VisionTransformer(nn.Module):
 
         self.channels_last = channels_last
         self.RD = RD
-        self.paralel = paralel
+        self.parallel = parallel
+        self.parallel_mode = parallel_mode
         self.num_transformer_blocks = num_transformer_blocks
         self.Attention_N = Attention_N
         self.attention_selection = attention_selection
         self.starting_dim = num_channels * patch_size ** 2
         self.dropout_values = dropout
-        num_patches = (img_size // patch_size)**2
-        self.q_lr = img_size // (2* patch_size) if selection_amount == None else min(selection_amount, num_patches) # Number of high-attention patches to select
+        if isinstance(img_size, int):
+            img_size = (img_size, img_size)
+        img_h, img_w = img_size
+
+        # 2. Calculate patches along height and width separately
+        num_patches_h = img_h // patch_size
+        num_patches_w = img_w // patch_size
+
+        # 3. Calculate total number of patches
+        self.num_patches = num_patches_h * num_patches_w
+
+        # 4. Determine the default selection amount (q_lr)
+        # We use max(img_h, img_w) to maintain the original heuristic's linear scaling
+        default_selection = max(img_h, img_w) // (2 * patch_size)
+
+        self.q_lr = selection_amount if selection_amount is not None else default_selection
         self.quantum_mlp = quantum_mlp
         self.quantum_classification = quantum_classification
         self.special_cls = special_cls
@@ -440,26 +456,26 @@ class VisionTransformer(nn.Module):
             kernel_size=patch_size,
             stride=patch_size
         )
-        
+        self.linear_after_patch_embedding = nn.Linear(hidden_size, hidden_size)
 
         self.cls_token = nn.Parameter(torch.zeros(1, 1, hidden_size))
-        num_steps = 1 + num_patches
+        self.num_steps = 1 + self.num_patches
 
-        self.pos_embedding = nn.Parameter(torch.randn(1, num_steps, hidden_size) * 0.02)
+        self.pos_embedding = nn.Parameter(torch.randn(1, self.num_steps, hidden_size) * 0.02)
         self.dropout = nn.Dropout(self.dropout_values['embedding_pos'])
 
         
         # Transformer blocks with attention selection
         self.transformer_blocks = nn.ModuleList( [nn.ModuleList([TransformerBlock_Attention_Chosen_QMLP(hidden_size // self.RD**i, num_heads, mlp_hidden_size, hidden_size // self.RD**(i + 1) , 
                                                                                         Attention_N = self.Attention_N, quantum_mlp = self.quantum_mlp,
-                                                                                        dropout = self.dropout_values, RD = self.RD,
+                                                                                        dropout = self.dropout_values, RD = self.RD, q_lr = self.q_lr,
                                                                                         attention_selection = self.attention_selection, special_cls = self.special_cls,
                                                                                         q_stride = self.q_stride, connectivity = self.connectivity)
-                                            for i in range(num_transformer_blocks)]) for j in range(paralel) ] )
+                                            for i in range(num_transformer_blocks)]) for j in range(parallel) ] )
 
         self.layer_norm = nn.LayerNorm(hidden_size // (RD**(num_transformer_blocks)))  # Normalization after the last transformer block
 
-        self.linear = nn.Linear( (hidden_size // (RD**(num_transformer_blocks)) ) * paralel, num_classes)
+        self.linear = nn.Linear( (hidden_size // (RD**(num_transformer_blocks)) ) * parallel, num_classes)
         self.linear2 = nn.Linear(num_classes,num_classes) if not self.quantum_classification else QuantumLayer(num_qubits=num_classes, graph=self.connectivity)
 
     def patch_embed_sample(self, x):
@@ -475,7 +491,7 @@ class VisionTransformer(nn.Module):
         # x.shape = (batch_size, num_patches, hidden_size)
         return x
 
-    def get_patches_by_attention(self, x, paralel_branch = 0):
+    def get_patches_by_attention(self, x, parallel_branch = 0):
         """ 
         x: (batch_size, num_channels, img_size, img_size)
         ...
@@ -485,137 +501,154 @@ class VisionTransformer(nn.Module):
         """
         # x.shape = (batch_size, num_patches, hidden_size)
         x_embedded = self.patch_embed_sample(x) 
+        
+        # Positional embedding
+        if  x_embedded.shape[1:] == self.pos_embedding.shape[1:]:
+            x_with_pos = x_embedded + self.pos_embedding[:,1:,:].to(x_embedded.device) 
+
+        elif x_embedded.shape[1] % (self.pos_embedding.shape[1] - 1)== 0:
+            x_with_pos = x_embedded + self.pos_embedding[:,1:,:].repeat(1, x_embedded.shape[1] // (self.pos_embedding.shape[1]-1), 1) # [B, S, D]
+
+        else:
+            print(f"Warning, skipping positional_embedding as shapes of [input tensor,cls_token]: {x_embedded.shape} and pos_embedding {self.pos_embedding.shape} don't match")
+            x_with_pos = x_embedded
 
         # CLS token
         # We want to add the cls token so that it takes part in the attention calculation
-        x_with_cls = torch.cat((self.cls_token.expand(x_embedded.shape[0], -1, -1), x_embedded), dim=1) 
+        cls_token = (self.cls_token + self.pos_embedding[:,0,:]).expand(x_with_pos.shape[0], -1, -1).to(x_with_pos.device)
+        x_with_cls_and_pos = torch.cat((cls_token, x_with_pos), dim=1) 
         # x.shape = (batch_size, num_steps, hidden_size)
-
-        # Positional embedding
-        x_with_cls_and_pos = x_with_cls + self.pos_embedding  # [B, S, D]
-
+   
         # Attention block
-        attn_input = self.transformer_blocks[paralel_branch][0].attn_norm(x_with_cls_and_pos)
+        attn_input = self.transformer_blocks[parallel_branch][0].attn_norm(x_with_cls_and_pos)
         # Note: Your original code assumes attn returns (output, map)
-        _, attn_map = self.transformer_blocks[paralel_branch][0].attn(attn_input)
+        _, attn_map = self.transformer_blocks[parallel_branch][0].attn(attn_input)
 
         # Rank patches by attention
         attn_indices = rank_patches_by_attention(attn_map)
 
+
         # Remove CLS token (index 0) from selection and select top q_lr
         sel_indices_with_cls_offset = torch.stack( [ attn_indices[i][ attn_indices[i] != 0 ][:self.q_lr] for i in range(attn_indices.size(0)) ])
+
  
-        # Gather the embedded patches (original function's output)
-        gathered_patches = x_with_cls.gather(1, sel_indices_with_cls_offset.unsqueeze(-1).expand(-1, -1, x_with_cls.size(-1)) ) # Shape: (batch_size, q_lr, hidden_size)
-        
-        # --- NEW ---
         # Convert to 0-based patch indices (by subtracting 1 for the CLS token)
         # This is the index relative to the *original* patch list (0 to num_patches-1)
         sel_patch_indices_0_based = sel_indices_with_cls_offset - 1
+
+        # Gather the embedded patches
+        gathered_patches = x_embedded.gather(1, sel_patch_indices_0_based.unsqueeze(-1).expand(-1, -1, x_embedded.size(-1)) ) # Shape: (batch_size, q_lr, hidden_size)
+
         
         return gathered_patches, sel_patch_indices_0_based
 
 
-    def reconstruct_image_from_patches(self, selected_patches_flat, sel_patch_indices_0_based, original_image_shape, quantum_channels=0, originals=True):
-        # --- 0. Device Handling ---
-        device = selected_patches_flat.device
+    def reconstruct_image_from_patches(self, patches, sel_patch_indices_0_based, original_image_shape):
+        """
+        Reconstructs images from patches matching the (B, Q, S, C, P, P) pipeline structure.
+        
+        Args:
+            patches (torch.Tensor): The patch data. 
+                                    Expected Shapes:
+                                    - 6D: (B, Q, S, C, P, P) -> (Spatial)
+                                    - 4D: (B, Q, S, C*P*P)   -> (Flattened)
+            sel_patch_indices_0_based (torch.Tensor): Indices of selected patches.
+                                    Shape: (B, S)
+            original_image_shape (tuple): (C, H, W) or (B, C, H, W).
+            
+        Returns:
+            torch.Tensor: Reconstructed images of shape (B, Q, C, H, W).
+        """
+        # --- 1. Setup Device and Dimensions ---
+        # Ensure we are working on the device where the heavy patch data is
+        device = patches.device
+        
+        # Move indices to the correct device immediately
         sel_patch_indices_0_based = sel_patch_indices_0_based.to(device)
 
-        # --- 1. Get Dimensions ---
+        # Handle Original Image Shape
+        if len(original_image_shape) == 4:
+            C_img, H, W = original_image_shape[1], original_image_shape[2], original_image_shape[3]
+        else:
+            C_img, H, W = original_image_shape
+
+        # Get Patch dimensions from class
         try:
             P_h, P_w = self.patch_size, self.patch_size
         except AttributeError:
-            raise AttributeError("self.patch_size must be defined.")
+            # Fallback if self.patch_size isn't set, try to infer from input if 6D
+            if patches.dim() == 6:
+                P_h, P_w = patches.shape[-2], patches.shape[-1]
+            else:
+                raise AttributeError("self.patch_size must be defined or input must be 6D.")
 
-        if len(original_image_shape) == 4:
-            C, H, W = original_image_shape[1:]
-        else:
-            C, H, W = original_image_shape
-
-        B = selected_patches_flat.shape[0]
-        grid_h, grid_w = H // P_h, W // P_w
+        # --- 2. Parse Input Tensor Dimensions ---
+        # We expect the structure: (Batch, Quantum_Channels, Selected_Patches, ...)
+        B = patches.shape[0]
+        Q = patches.shape[1]
+        S = patches.shape[2] # This is q_lr (selection amount)
+        
+        # Calculate grid specs
+        grid_h = H // P_h
+        grid_w = W // P_w
         num_patches_total = grid_h * grid_w
-        
-        Q_total = int(quantum_channels + originals)
-        assert Q_total > 0, "Must have at least 1 channel (original or quantum)."
-        
-        q_lr = sel_patch_indices_0_based.size(1)
-        patch_pixel_dim = selected_patches_flat.size(2)
-        
-        # --- 2. Data Reshaping (HYBRID FIX) ---
-        # We need to unify the shape to: (B, Q_total, q_lr, patch_pixel_dim)
-        
-        # Container for the ordered patches
-        ordered_patches = []
+        pixel_dim = C_img * P_h * P_w
 
-        # POINTER: Keep track of where we are in the flat sequence
-        current_idx = 0
-
-        # A. Handle Originals (Block Structure)
-        # Originals are usually stuck at the front as a contiguous block of length `q_lr`
-        if originals:
-            # Slice the original patches: (B, q_lr, dim)
-            # Assumes originals come FIRST in the concatenation
-            orig_chunk = selected_patches_flat[:, :q_lr, :]
+        # --- 3. Normalize Input to (B*Q, S, C, P, P) ---
+        # We merge B and Q to treat them as a "large batch" for parallel reconstruction
+        
+        if patches.dim() == 6:
+            # Input is (B, Q, S, C, P, P)
+            # Reshape to (B*Q, S, C, P, P)
+            pixel_patches = patches.view(B * Q, S, C_img, P_h, P_w)
             
-            # Reshape to (B, 1, q_lr, dim) so it fits the 'Channel' dim
-            ordered_patches.append(orig_chunk.unsqueeze(1))
+        elif patches.dim() == 4:
+            # Input is (B, Q, S, flat_pixels)
+            # Verify dimensions
+            if patches.shape[-1] != pixel_dim:
+                raise ValueError(f"Flattened dim {patches.shape[-1]} != Expected {pixel_dim}")
             
-            current_idx += q_lr
-
-        # B. Handle Quantum Channels (Interleaved Structure)
-        # These are arranged: [P1_Q1, P1_Q2, P2_Q1, P2_Q2...]
-        if quantum_channels > 0:
-            # Slice the rest: (B, q_lr * quantum_channels, dim)
-            quant_chunk = selected_patches_flat[:, current_idx:, :]
+            # Unflatten and merge B*Q
+            pixel_patches = patches.reshape(B * Q, S, C_img, P_h, P_w)
             
-            # Verify shape
-            expected_len = q_lr * quantum_channels
-            if quant_chunk.shape[1] != expected_len:
-                 raise ValueError(f"Remaining data length {quant_chunk.shape[1]} != Expected {expected_len}")
+        else:
+            raise ValueError(f"Unexpected patch tensor dimension: {patches.dim()}. Expected 4 or 6.")
 
-            # Un-interleave: 
-            # 1. View as (B, q_lr, Q_ch, dim)
-            quant_view = quant_chunk.view(B, q_lr, quantum_channels, patch_pixel_dim)
-            # 2. Permute to (B, Q_ch, q_lr, dim)
-            quant_ordered = quant_view.permute(0, 2, 1, 3)
-            
-            ordered_patches.append(quant_ordered)
-
-        # C. Concatenate everything into (B, Q_total, q_lr, dim)
-        # This results in [Originals, Q1, Q2, ...] along dimension 1
-        flat_patches_ordered = torch.cat(ordered_patches, dim=1)
-
-        # --- 3. Merge Dimensions for Processing ---
-        # (B, Q, q_lr, dim) -> (B*Q, q_lr, dim)
-        flat_patches_merged = flat_patches_ordered.reshape(B * Q_total, q_lr, patch_pixel_dim)
+        # --- 4. Prepare Indices ---
+        # Indices are currently (B, S). We need them to be (B*Q, S).
+        # Logic: The same indices apply to all Q variations of a specific image.
         
-        # View as spatial pixels: (B*Q, q_lr, C, P, P)
-        pixel_patches = flat_patches_merged.view(B * Q_total, q_lr, C, P_h, P_w)
+        # (B, S) -> (B, 1, S) -> (B, Q, S) -> (B*Q, S)
+        indices_expanded = sel_patch_indices_0_based.unsqueeze(1).expand(-1, Q, -1)
+        indices_merged = indices_expanded.reshape(B * Q, S)
+        
+        # Expand for scatter: (B*Q, S) -> (B*Q, S, 1, 1, 1) -> (B*Q, S, C, P, P)
+        idx_scatter = indices_merged.view(B * Q, S, 1, 1, 1).expand(-1, -1, C_img, P_h, P_w)
 
-        # Expand Indices: (B, q_lr) -> (B, Q, q_lr) -> (B*Q, q_lr)
-        indices_expanded = sel_patch_indices_0_based.unsqueeze(1).expand(-1, Q_total, -1)
-        indices_merged = indices_expanded.reshape(B * Q_total, q_lr)
-
-        # --- 4. Scatter and Fold ---
+        # --- 5. Scatter to Canvas ---
+        # Create empty canvas: (B*Q, Total_Patches, C, P, P)
         canvas_patches = torch.zeros(
-            (B * Q_total, num_patches_total, C, P_h, P_w), 
-            device=device, 
-            dtype=selected_patches_flat.dtype
+            (B * Q, num_patches_total, C_img, P_h, P_w),
+            device=device,
+            dtype=patches.dtype
         )
-
-        idx_scatter = indices_merged.view(B * Q_total, q_lr, 1, 1, 1).expand(-1, -1, C, P_h, P_w)
+        
+        # Scatter the pixel data onto the canvas at the correct patch positions
         canvas_patches.scatter_(dim=1, index=idx_scatter, src=pixel_patches)
 
-        expected_dim = C * P_h * P_w
-        canvas_flat = canvas_patches.view(B * Q_total, num_patches_total, expected_dim).transpose(1, 2)
+        # --- 6. Fold (Reconstruct Spatial Image) ---
+        # Reshape for Fold: (B*Q, N, C, P, P) -> (B*Q, C*P*P, N)
+        # Note: Fold expects (Batch, Channels * Kernel * Kernel, L)
+        canvas_flat = canvas_patches.view(B * Q, num_patches_total, pixel_dim).transpose(1, 2)
         
         fold = nn.Fold(output_size=(H, W), kernel_size=(P_h, P_w), stride=(P_h, P_w))
-        reconstructed_combined = fold(canvas_flat)
         
-        # --- 5. Final Reshape ---
-        # (B, Q, C, H, W)
-        reconstructed_final = reconstructed_combined.view(B, Q_total, C, H, W)
+        # Result: (B * Q, C, H, W)
+        reconstructed_combined = fold(canvas_flat)
+
+        # --- 7. Final Reshape ---
+        # Separate Batch and Quantum dimensions: (B, Q, C, H, W)
+        reconstructed_final = reconstructed_combined.view(B, Q, C_img, H, W)
         
         return reconstructed_final
     
@@ -670,32 +703,45 @@ class VisionTransformer(nn.Module):
 
     def forward(self, x):
 
+        shape = x.shape
+
         if self.patch_embedding_required == 'true':
             x = self.patch_embed_sample(x)
-            # Positional embedding
 
-            # CLS token
-            x = torch.cat((self.cls_token.expand(x.shape[0], -1, -1), x), dim=1)
-            # x.shape = (batch_size, num_steps, hidden_size)
-
-            x = self.dropout(x + self.pos_embedding)  # [B, S, D]
-            # x.shape = (batch_size, num_patches, hidden_size)
         elif self.patch_embedding_required == 'flatten':
-            x = x.view((x.shape[0], x.shape[1], -1))
+            x = x.view((x.shape[0], x.shape[1], -1))        
+        
+        x = self.linear_after_patch_embedding(x)
 
+        # Positional embedding
+        if  x.shape[1:] == self.pos_embedding.shape[1:]:
+            x = x + self.pos_embedding.to(x.device) 
 
-        # CLS token (Even if we haven't applied patch embedding here, we assume the input x doesn't have the cls token included yet)
-        #print(f" After patch embedding {self.patch_embedding_required} Shapes, x and cls: {x.shape}, {self.cls_token.expand(x.shape[0], -1, -1).shape}")
-        x = torch.cat((self.cls_token.expand(x.shape[0], -1, -1), x), dim=1)
-        # x.shape = (batch_size, num_steps, hidden_size)
+        elif x.shape[1] % (self.num_patches) == 0:
+            x = x + self.pos_embedding[:, 1:, :].repeat(1, x.shape[1] // (self.num_patches), 1) # [B, S, D]
 
         # Repeat x for each parallel branch
-        x_parallel = x.unsqueeze(0).repeat(self.paralel, 1, 1, 1)  # [P, B, S, D]
+        if self.parallel_mode == 'copy':
+             # CLS token
+            cls_token = (self.cls_token + self.pos_embedding[:, 0, :]).expand( x.shape[0], -1, -1 )
+            x = torch.cat(( cls_token, x), dim=1)
+            # x.shape = (batch_size, num_steps, hidden_size)
+            x_parallel = x.unsqueeze(0).repeat(self.parallel, 1, 1, 1)  # [P, B, S, D]
+
+        elif self.parallel_mode == 'quantum':
+            Q = shape[1] // self.num_patches
+            x_aux = x.reshape( shape[0], Q , self.num_patches, shape[-1] ).permute(1, 0, 2, 3).contiguous() # [Q, B, S, D] , Q = Quantum versions of the image
+            cls_token = (self.cls_token + self.pos_embedding[:, 0, :]).unsqueeze(0).expand( Q, x.shape[0], -1, -1 )
+            x_parallel = torch.cat([cls_token, x_aux], dim = -2)
+        else:   
+            raise ValueError(f"Expected values 'quantum' or 'copy' for input argument 'parallel_mode' but instead got {self.parallel_mode}")
+
+        x_parallel = self.dropout(x_parallel)
 
         attn_maps = []
         outputs = []
 
-        for i in range(self.paralel):
+        for i in range(self.parallel):
             out = x_parallel[i]  # [B, S, D]
             for j in range(self.num_transformer_blocks):
                 out, attn = self.transformer_blocks[i][j](out)  # [B, S, D], attn: [B, H, S, S] or similar #type: ignore
@@ -707,7 +753,6 @@ class VisionTransformer(nn.Module):
 
         # Concatenate along hidden dimension
         x = torch.cat(outputs, dim=1)  # [B, D * P]
-
 
         # Classification logits
         x = self.linear(x)
@@ -811,7 +856,7 @@ class Encoder(nn.Module):
         super(Encoder, self).__init__()
         self.encoder_layers = encoder_layers
         self.dropout_pos = dropout_pos
-        self.paralel = len(self.encoder_layers)
+        self.parallel = len(self.encoder_layers)
         self.num_transformer_blocks = len(self.encoder_layers[0])
 
 
@@ -821,12 +866,12 @@ class Encoder(nn.Module):
         x += pos_embedding[:, :(x.shape[1])]
         out = self.dropout_pos(x)
         # Repeat x for each parallel branch
-        x_parallel = x.unsqueeze(0).repeat(self.paralel, 1, 1, 1)  # [P, B, S, D]
+        x_parallel = x.unsqueeze(0).repeat(self.parallel, 1, 1, 1)  # [P, B, S, D]
 
         last_layers_outputs = []
         outputs = []
 
-        for i in range(self.paralel):
+        for i in range(self.parallel):
             out = x_parallel[i]  # [B, S, D]
 
             for j in range(self.num_transformer_blocks):
@@ -839,15 +884,15 @@ class Encoder(nn.Module):
         if type(out) != torch.Tensor:
             raise ValueError("The output is not a tensor.")
 
-        return torch.stack(outputs, dim = 0)  # Shape: (paralel, batch_size, num_patches + 1, hidden_size)
+        return torch.stack(outputs, dim = 0)  # Shape: (parallel, batch_size, num_patches + 1, hidden_size)
 
 class Decoder(nn.Module):
     def __init__(self, decoder_layers, mlp_hidden_size, hidden_size):
         super(Decoder, self).__init__()
         self.decoder_layers = decoder_layers
-        self.paralel = len(self.decoder_layers)
+        self.parallel = len(self.decoder_layers)
         self.num_transformer_blocks = len(self.decoder_layers[0])
-        self.mix_paralels_info = nn.Linear(self.paralel * mlp_hidden_size, hidden_size)
+        self.mix_parallels_info = nn.Linear(self.parallel * mlp_hidden_size, hidden_size)
 
 
     def forward(self, z):
@@ -856,7 +901,7 @@ class Decoder(nn.Module):
         last_layers_outputs = []
         outputs = []
 
-        for i in range(self.paralel):
+        for i in range(self.parallel):
             out = z[i]  # [B, S, D]
 
             for j in range(self.num_transformer_blocks - 1):
@@ -875,8 +920,8 @@ class Decoder(nn.Module):
             mlp_out = last_layer.mlp_sel.dropout(mlp_out)
             outputs.append( last_layer.mlp_sel.gelu(mlp_out) ) # Here shape is [B, S, mlp_hidden_size]
         
-        pre_mixing_paralel_info = torch.cat(outputs, dim = -1) # Here shape is [B, S, mlp_hidden_size * paralel]
-        mixed_out = self.mix_paralels_info(pre_mixing_paralel_info)
+        pre_mixing_parallel_info = torch.cat(outputs, dim = -1) # Here shape is [B, S, mlp_hidden_size * parallel]
+        mixed_out = self.mix_parallels_info(pre_mixing_parallel_info)
 
         # Concatenate outputs from all parallel branches
         return mixed_out
@@ -884,14 +929,14 @@ class Decoder(nn.Module):
 class AutoEnformer(nn.Module):
             def __init__(self, img_size, num_channels, patch_size, hidden_size, num_heads, num_transformer_blocks ,mlp_hidden_size,
                               Attention_N = 2, dropout={'embedding_attn': 0.225, 'after_attn': 0.225, 'feedforward': 0.225, 'embedding_pos': 0.225}, channels_last=False, attention_selection='none', RD=1,
-                              q_stride = 1, paralel = 1):
+                              q_stride = 1, parallel = 1):
                 super(AutoEnformer, self).__init__()
 
                 self.channels_last = channels_last
                 self.RD = RD
                 self.trainlosslist = []
                 self.vallosslist = []
-                self.paralel = paralel
+                self.parallel = parallel
                 self.num_transformer_blocks = num_transformer_blocks
                 self.hidden_size = hidden_size
                 self.num_heads = num_heads
@@ -921,14 +966,14 @@ class AutoEnformer(nn.Module):
                                                                                                     dropout = self.dropout_values,
                                                                                                     attention_selection = 'none',
                                                                                                     q_stride = self.q_stride )
-                                                        for i in range(self.num_transformer_blocks)])  for j in range(self.paralel) ] )
+                                                        for i in range(self.num_transformer_blocks)])  for j in range(self.parallel) ] )
                 
                 self.decoder_layers = nn.ModuleList( [nn.ModuleList ([TransformerBlock_Attention_Chosen_QMLP(self.hidden_size // self.RD**i, self.num_heads, self.mlp_hidden_size, self.hidden_size // self.RD**(i + 1) ,
                                                                                             Attention_N = self.Attention_N , quantum_mlp = False,
                                                                                             dropout = self.dropout_values,
                                                                                             attention_selection = 'none',
                                                                                             q_stride = self.q_stride )
-                                                        for i in range(self.num_transformer_blocks, 0, -1) ]) for j in range(self.paralel) ] )
+                                                        for i in range(self.num_transformer_blocks, 0, -1) ]) for j in range(self.parallel) ] )
                                         
                 self.Encoder = Encoder(self.encoder_layers, self.dropout)
                 self.Decoder = Decoder(self.decoder_layers, self.mlp_hidden_size, self.hidden_size)
@@ -947,11 +992,11 @@ class AutoEnformer(nn.Module):
                 out = self.dropout(x)
                 
                 # Repeat x for each parallel branch
-                x_parallel = x.unsqueeze(0).repeat(self.paralel, 1, 1, 1)  # [P, B, S, D]
+                x_parallel = x.unsqueeze(0).repeat(self.parallel, 1, 1, 1)  # [P, B, S, D]
 
                 outputs = []
 
-                for i in range(self.paralel):
+                for i in range(self.parallel):
                     out = x_parallel[i]  # [B, S, D]
 
                     for j in range(self.num_transformer_blocks - 1):
@@ -972,7 +1017,7 @@ class AutoEnformer(nn.Module):
                 
                 latent_representations =  torch.stack(outputs, dim=0)
 
-                return latent_representations  # Shape: (paralel, batch_size, num_patches + 1, mlp_hidden_size)
+                return latent_representations  # Shape: (parallel, batch_size, num_patches + 1, mlp_hidden_size)
                     
             
                         
@@ -1033,7 +1078,7 @@ class DeViT(nn.Module):
                     patch_size=p['patch_size'], hidden_size= p['hidden_size'], num_heads=p['num_head'], Attention_N = p['Attention_N'],
                     num_transformer_blocks=p['num_transf'], attention_selection= p['attention_selection'], special_cls = p['special_cls'], 
                     mlp_hidden_size=p['mlp_size'], quantum_mlp = False, dropout = p['dropout'], channels_last=False, quantum_classification = False,
-                    paralel = p['paralel'], RD = p['RD'], q_stride = p['q_stride'], connectivity = 'chain', patch_embedding_required= False
+                    parallel = p['parallel'], RD = p['RD'], q_stride = p['q_stride'], connectivity = 'chain', patch_embedding_required= False
                 )
 
                 

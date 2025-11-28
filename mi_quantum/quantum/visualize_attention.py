@@ -29,7 +29,7 @@ import torchvision.utils as vutils
 p1 = {
     '1_learning_rate': 0.0025, '1_hidden_size': 48, '1_dropout': 0.3,
     '1_quantum' : False, '1_num_head': 4, '1_Attention_N' : 2, '1_num_transf': 2, '1_mlp_size': 5, '1_patch_size': 4, '1_weight_decay': 1e-7, '1_attention_selection': 'none', 
-    '1_selection_amount': 49, '1_RD': 1, '1_connectivity' : 'king' ,'1_entangle_method' : 'CRX', '1_special_cls' : 'none', '1_paralel': 1, '1_patience': -1, 
+    '1_selection_amount': 49, '1_RD': 1, '1_connectivity' : 'king' ,'1_entangle_method' : 'CRX', '1_special_cls' : 'none', '1_parallel': 1, '1_patience': -1, 
     '1_scheduler_factor': 0.985, '1_q_stride': 1, '1_ancilla' : 0, '1_channels_out' : list(range(9)), '1_augmentation_prob' : 0, '1_val_train_pond' : 1,
     '1_flatten_extra_channels' : False, '1_quanv_kernel_size' : 3
 }
@@ -37,7 +37,7 @@ p1 = {
 p2 = {
     'learning_rate': 0.0025, 'hidden_size': 48, 'dropout': 0.3,
     'quantum' : False, 'num_head': 4, 'Attention_N' : 2, 'num_transf': 2, 'mlp_size': 5, 'patch_size': 4, 'weight_decay': 1e-7, 'attention_selection': 'filter',
-    'selection_amount': 49, 'RD': 1, 'special_cls' : 'none', 'paralel': 2, 'patience': -1, 'scheduler_factor': 0.985, 'q_stride': 1, 'augmentation_prob' : 0,
+    'selection_amount': 49, 'RD': 1, 'special_cls' : 'none', 'parallel': 2, 'patience': -1, 'scheduler_factor': 0.985, 'q_stride': 1, 'augmentation_prob' : 0,
     'val_train_pond' : 1, 'len_channels_scaler' : 2
 }
 
@@ -155,7 +155,7 @@ model1 = quantum.vit.VisionTransformer(
     patch_size=p1['1_patch_size'], hidden_size= shape[0]* p1['1_patch_size']**2, num_heads=p1['1_num_head'], Attention_N = p1['1_Attention_N'],
     num_transformer_blocks=p1['1_num_transf'], attention_selection= p1['1_attention_selection'], selection_amount = p1['1_selection_amount'], special_cls = p1['1_special_cls'], 
     mlp_hidden_size=p1['1_mlp_size'], quantum_mlp = False, dropout = make_dropout( p1['1_dropout']) , channels_last=exp_config['channels_last'], quantum_classification = False,
-    paralel = p1['1_paralel'], RD = p1['1_RD'], q_stride = p1['1_q_stride'], connectivity = 'chain'
+    parallel = p1['1_parallel'], RD = p1['1_RD'], q_stride = p1['1_q_stride'], connectivity = 'chain'
 )
 
 # Train first model
@@ -213,7 +213,7 @@ model2 = quantum.vit.VisionTransformer(
     patch_size=p2['patch_size'], hidden_size= hidden_size, num_heads=p2['num_head'], Attention_N = p2['Attention_N'],
     num_transformer_blocks=p2['num_transf'], attention_selection= p2['attention_selection'], special_cls = p2['special_cls'], 
     mlp_hidden_size=p2['mlp_size'], quantum_mlp = False, dropout = make_dropout(p2['dropout']), channels_last=exp_config['channels_last'], quantum_classification = False,
-    paralel = p2['paralel'] , RD = p2['RD'], q_stride = p2['q_stride'], connectivity = 'chain', patch_embedding_required = 'flatten' if exp_config['augmenting'] else 'false'
+    parallel = p2['parallel'] , RD = p2['RD'], q_stride = p2['q_stride'], connectivity = 'chain', patch_embedding_required = 'flatten' if exp_config['augmenting'] else 'false'
 )
 
 

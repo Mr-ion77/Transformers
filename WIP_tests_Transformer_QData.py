@@ -25,7 +25,7 @@ N = 150 # Number of epochs
 p = {
     'learning_rate': 0.0025, 'hidden_size': 48, 'dropout': {'embedding_attn': 0.225, 'after_attn': 0.225, 'feedforward': 0.225, 'embedding_pos': 0.225},
     'quantum' : False, 'num_head': 4, 'Attention_N' : 2, 'num_transf': 2, 'mlp_size': 6, 'patch_size': 4, 'weight_decay': 1e-7, 'attention_selection': 'filter',
-    'RD': 1, 'special_cls' : False, 'paralel': 2, 'patience': -1, 'scheduler_factor': 0.998, 'q_stride': 4, 'connectivity': 'david_star', 'selection_amount': 25  # No early stopping
+    'RD': 1, 'special_cls' : False, 'parallel': 2, 'patience': -1, 'scheduler_factor': 0.998, 'q_stride': 4, 'connectivity': 'david_star', 'selection_amount': 25  # No early stopping
 }
 
 NameOfExperiment = 'Attention Filtering with selection amount 25'
@@ -97,7 +97,7 @@ if __name__ == "__main__":
                     patch_size = p['patch_size'], hidden_size = shape[0]* p['patch_size']**2, num_heads = p['num_head'], Attention_N = p['Attention_N'],
                     num_transformer_blocks = p['num_transf'], attention_selection = p['attention_selection'], selection_amount = p['selection_amount'], special_cls = p['special_cls'], 
                     mlp_hidden_size = p['mlp_size'], quantum_mlp = False, dropout = p['dropout'], channels_last = False, quantum_classification = False,
-                    paralel = p['paralel'], RD = p['RD'], q_stride = p['q_stride'], connectivity = p['connectivity']
+                    parallel = p['parallel'], RD = p['RD'], q_stride = p['q_stride'], connectivity = p['connectivity']
                 )
 
                 # Train model

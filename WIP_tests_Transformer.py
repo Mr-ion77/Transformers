@@ -5,10 +5,10 @@ if __name__ == "__main__":
     
     # 1. Define Base Configs
     exp_config_base = {
-        'experiment_id': 'special_cls_variants',
-        'experiment_name': 'Full vs Partial vs None',
+        'experiment_id': 'q_stride_redo',
+        'experiment_name': 'Striding effect on quantum transformer',
         'B': 256,
-        'N': 100, # Num epochs
+        'N': 125, # Num epochs
         'num_experiments': 20,
         'num_classes': 7,
         'square' : True,
@@ -24,21 +24,21 @@ if __name__ == "__main__":
         'Attention_N': 2,
         'num_transf': 2,
         'selection_amount': 25,
-        'special_cls': 'full_projection',
-        'mlp_size': 5,
-        'quantum': False,
+        'special_cls': 'false',
+        'mlp_size': 4,
+        'quantum': True,
         'dropout': 0.225,
-        'paralel': 2,
+        'parallel': 2,
         'attention_selection': 'filter',
         'RD': 1,
         'q_stride': 1,
-        'connectivity': 'chain',
-        'learning_rate': 0.00275,
+        'connectivity': 'star',
+        'learning_rate': 0.0025,
         'hidden_size': 48, # Example, might be derived
         'weight_decay': 1e-7,
         'patience': -1,
         'scheduler_factor': 0.985,
-        'augmentation_prob' : 1, 
+        'augmentation_prob' : 0, 
         'val_train_pond' : 1,
     }
 
@@ -48,10 +48,11 @@ if __name__ == "__main__":
     }
     
     model_iter = {
-        'special_cls': ['full_projection', 'part_projection', 'false'],
+        'quantum' : [True, False],
+        'q_stride': [1, 2, 3, 4],
     }
 
-    graph_columns = ['special_cls', 'test_auc']
+    graph_columns = ['quantum', 'q_stride', 'test_auc']
 
     # 3. Run Experiment
     print("--- Starting Refactored Transformer Experiment ---")

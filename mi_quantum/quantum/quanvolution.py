@@ -40,7 +40,7 @@ class QuantumKernel(nn.Module):
     def __init__(self, circuit, channels_out = [-1], ancilla = 0):
         super().__init__()
         self.circuit = circuit
-        self.channels_out = channels_out if ancilla == 0 else list(range(-1, -ancilla - 1, -1))
+        self.channels_out = channels_out
         self.ancilla = ancilla        
 
     def forward(self,x):
@@ -60,9 +60,9 @@ class QuantumConv2D(nn.Module):
         super().__init__()
 
         if ancilla and channels_out != [-1]:
-            print(f'Please be ware that when ancilla is set to True channels_out must be [-1], but got {channels_out}. Automatically setting channels_out to [-1]')
+            print(f'Please be ware that when ancilla is set to True channels_out must be [-1], but got {channels_out}.')
 
-        self.channels_out = channels_out if not ancilla else [-1]
+        self.channels_out = channels_out 
         self.kernel = QuantumKernel(
             circuit = QuantumLayer(num_qubits = kernel_size**2 + ancilla, graph = graph, entangle_method=entangle_method),
             channels_out = channels_out, ancilla = ancilla

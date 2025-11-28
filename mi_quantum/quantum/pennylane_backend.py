@@ -82,6 +82,8 @@ class QuantumLayer(torch.nn.Module):
                     qml.CNOT(wires=[pair[0], pair[1]])
                 elif self.entangle_method == 'CRX':
                     qml.CRX(np.pi/3, wires=[pair[0], pair[1]]) 
+                elif self.entangle_method == 'CRY':
+                    qml.CRY(np.pi/3, wires=[pair[0], pair[1]]) 
                 elif self.entangle_method == 'SEL': # Stands for StronglyEntanglingLayers
                     qml.StronglyEntanglingLayers(weights, wires=range(num_qubits), ranges = [1])
 
