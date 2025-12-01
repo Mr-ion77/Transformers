@@ -729,8 +729,11 @@ class VisionTransformer(nn.Module):
             x_parallel = x.unsqueeze(0).repeat(self.parallel, 1, 1, 1)  # [P, B, S, D]
 
         elif self.parallel_mode == 'quantum':
-            Q = shape[1] // self.num_patches
-            x_aux = x.reshape( shape[0], Q , self.num_patches, shape[-1] ).permute(1, 0, 2, 3).contiguous() # [Q, B, S, D] , Q = Quantum versions of the image
+            Q = self.parallel
+            assert shape[-2] % self.parallel == 0, \
+                f"When parameter 'paralel_mode' = 'quantum', parameter 'paralel' is expected to be the amount of stacked versions of the original image (Q + concatenate_original)"
+
+            x_aux = x.reshape( shape[0], Q , -1, shape[-1] ).permute(1, 0, 2, 3).contiguous() # [Q, B, S, D] , Q = Quantum versions of the image
             cls_token = (self.cls_token + self.pos_embedding[:, 0, :]).unsqueeze(0).expand( Q, x.shape[0], -1, -1 )
             x_parallel = torch.cat([cls_token, x_aux], dim = -2)
         else:   

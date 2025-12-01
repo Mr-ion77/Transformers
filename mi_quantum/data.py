@@ -513,7 +513,7 @@ def preprocess_and_save(
     return results
 
 
-def cut_extra_channels_from_latents( Latents, i , channels_out , flattened = True):    
+def cut_extra_channels_from_latents( Latents, i , channels_out):    
     """
     Latents: List of dataloaders [train, val, test]
     i: int, number of channels to keep
@@ -544,10 +544,8 @@ def cut_extra_channels_from_latents( Latents, i , channels_out , flattened = Tru
             for samples, labels, idx in split:
 
                 shape = samples.shape  # (B, total_channels, H, W) or (B, total_channels)
-                if flattened:
-                    new_samples = samples[:, : ( i*shape[-1]// channels_out), ... ]  # Keep only the first i channels
-                else:
-                    new_samples = samples[..., : ( i*(shape[-2]// channels_out) ) , :  ]  # Keep only the first i channels
+                new_samples = samples[:, : ( i*shape[1]// channels_out), ... ]  # Keep only the first i channels
+
                 new_data.extend(new_samples)
                 new_labels.extend(labels)
                 shape_after = new_samples.shape

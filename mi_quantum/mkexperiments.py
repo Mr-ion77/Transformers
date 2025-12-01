@@ -69,6 +69,9 @@ def make_directories_for_experiment(variant = 'selformer', exp_config = None, p1
              f.write(f"Number of Epochs Classifier: {exp_config.get('N2', 'N/A')}\n")
              f.write('\nHyperparameters for Classifier\n')
              json.dump(p2, f, indent=4)
+        if exp_config:
+            f.write('\nGeneral settings of the simulation:\n')
+            json.dump(p2, f, indent=4)
         
         # Handle iter blocks
         iter_blocks = [
@@ -468,6 +471,8 @@ def make_experiment_selformer(exp_config, p1_base, p2_base, all_iter={}, m1_iter
 
                         for i in channel_iterator:
 
+                            Aux_Latents = Latents
+
                             if config == 'patchwise':
 
                                 if p1['1_flatten_extra_channels']:
@@ -476,15 +481,14 @@ def make_experiment_selformer(exp_config, p1_base, p2_base, all_iter={}, m1_iter
                                         print("Skipping redundant configuration with flattened extra channels already trained.")
                                         continue
                                     else:
+                                        Aux_Latents = Latents
                                         TrainedFlattenedOnce = True
 
-                                else:
-
+                                elif exp_config['rewind_channels'] > 0:
+                                    
                                     p1.update( {'1_channels_out' : original_measured[:i] } )
                                     Aux_Latents = cut_extra_channels_from_latents( Latents, i, original_channels_out )
-
-                            else:
-                                Aux_Latents = Latents
+                                
 
                             for pack_class in itertools.product(*m2_iter.values()):
 
@@ -511,10 +515,10 @@ def make_experiment_selformer(exp_config, p1_base, p2_base, all_iter={}, m1_iter
 
                                 model2 = quantum.vit.VisionTransformer(
                                     img_size=shape[-1], num_channels= 3, num_classes=exp_config['num_classes'],
-                                    patch_size=p2['patch_size'], hidden_size= hidden_size, num_heads=p2['num_head'], Attention_N = p2['Attention_N'],
-                                    num_transformer_blocks=p2['num_transf'], attention_selection= p2['attention_selection'], special_cls = p2['special_cls'], 
-                                    mlp_hidden_size=p2['mlp_size'], quantum_mlp = False, dropout = make_dropout(p2['dropout']), channels_last=exp_config['channels_last'], quantum_classification = False,
-                                    parallel = p2['parallel'] , RD = p2['RD'], q_stride = p2['q_stride'], connectivity = 'chain', patch_embedding_required = 'flatten' if exp_config['augmenting'] else 'false'
+                                    patch_size=p2['patch_size'], hidden_size= hidden_size, num_heads=p2['num_head'], Attention_N = p2['Attention_N'], num_transformer_blocks=p2['num_transf'], 
+                                    attention_selection= p2['attention_selection'], special_cls = p2['special_cls'], mlp_hidden_size=p2['mlp_size'], quantum_mlp = False, 
+                                    dropout = make_dropout(p2['dropout']), channels_last= exp_config['channels_last'], quantum_classification = False, parallel_mode = 'copy' if config == 'none' else p2['parallel_mode'],
+                                    parallel = p2['parallel'], RD = p2['RD'], q_stride = p2['q_stride'], connectivity = 'chain', patch_embedding_required = 'flatten' if exp_config['augmenting'] else 'false',
                                 )
 
                                 print('\nTraining second model: classifier ViT on latent representations\n')
