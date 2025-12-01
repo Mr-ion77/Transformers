@@ -161,12 +161,12 @@ def log_experiment_row(csv_path, row_data, column_order):
     df.to_csv(csv_path, mode='a', header=False, index=False)
 
 
-def make_experiment_transformer(exp_config, p_base, all_iter={}, model_iter={}, graph_columns=['attention_selection', 'test_auc']):
+def make_experiment_transformer(exp_config, p_base, all_iter={}, data_iter = {}, model_iter={}, graph_columns=['attention_selection', 'test_auc']):
     
     root_id = exp_config['experiment_id']
     
     # Define columns for CSV logging
-    columns = ['idx', 'all_iter_idx'] + list(all_iter.keys()) + list(model_iter.keys()) + DEFAULT_COLUMNS
+    columns = ['idx', 'all_iter_idx', 'q_config'] + list(all_iter.keys()) + list(data_iter.keys()) + list(model_iter.keys()) + DEFAULT_COLUMNS
     try:
         columns.remove('test_auc_sel')
         columns.remove('test_acc_sel')
@@ -182,103 +182,150 @@ def make_experiment_transformer(exp_config, p_base, all_iter={}, model_iter={}, 
         
         csv_path, save_path = None, None # Init for error handling
         
-        try:
-            # --- Create directories and CSV file ---
-            csv_path, save_path = make_directories_for_experiment(
-                variant='transformer', # Specify variant
-                exp_config=current_exp_config, 
-                p1=p, # Use p1 slot for the single param dict
-                all_iter=all_iter, 
-                m2_iter=model_iter, # m2_iter for consistency, as it's the "model" iter
-                columns=columns
-            )
+        #try:
 
-            # --- Load data ---
-            train_dl, val_dl, test_dl, shape = load_data(
-                data_flag='dermamnist',
-                pixel=28,
-                batch_size=current_exp_config['B'],
-                num_workers=4,
-                pin_memory=True
-            )
-            
-            num_channels = shape[-1] if current_exp_config['channels_last'] else shape[0]
-            
-            # Send initial progress
-            send_telegram_report(current_exp_config, progress=0)   
+        NoneBool, QuantumBool = 'none' in exp_config['q_config'], 'quantum' in exp_config['q_config']
 
-            # --- Experiment Repetition Loop ---
-            for idx in range(current_exp_config['num_experiments']):
-                progress = int( 100 * (idx + 1) // current_exp_config['num_experiments'] )
-                # Send progress update (helper handles filtering)
-                send_telegram_report(current_exp_config, progress=progress)
-                
-                print(f"\n===== Experiment Run {idx + 1} / {current_exp_config['num_experiments']} =====")
+        # --- Create directories and CSV file ---
+        csv_path, save_path = make_directories_for_experiment(
+            variant='transformer', # Specify variant
+            exp_config=current_exp_config, 
+            p1=p, # Use p1 slot for the single param dict
+            all_iter=all_iter, 
+            m2_iter=model_iter, # m2_iter for consistency, as it's the "model" iter
+            columns=columns
+        )
+
+        # --- Load data ---
+        notrans_train_dl, train_dl, val_dl, test_dl, shape = data.get_medmnist_dataloaders(
+            pixel=exp_config['pixels'], 
+            data_flag='dermamnist', 
+            extra_tr_without_trans=True, 
+            batch_size=exp_config['B'], 
+            num_workers=4, 
+            pin_memory=True
+        )
+        
+        num_channels = shape[-1] if current_exp_config['channels_last'] else shape[0]
+        processed_once = False
+        # Send initial progress
+        send_telegram_report(current_exp_config, progress=0)   
+
+        # --- Experiment Repetition Loop ---
+        for idx in range(current_exp_config['num_experiments']):
+            progress = int( 100 * (idx + 1) // current_exp_config['num_experiments'] )
+            # Send progress update (helper handles filtering)
+            send_telegram_report(current_exp_config, progress=progress)
+            
+            print(f"\n===== Experiment Run {idx + 1} / {current_exp_config['num_experiments']} =====")
+
+            for pack_data in itertools.product(*data_iter.values()):
+
+                if pack_data or not processed_once:
+
+                    current_params_data = dict(zip(data_iter.keys(), pack_data))
+                    custom_update_dict(p, current_params_data)
+
+                    DataLoaders = [notrans_train_dl, val_dl, test_dl]
+                    paddings = { 2 : { 'Up': 1, 'Down': 0, 'Left': 1, 'Right': 0 }, 3 : { 'Up': 1, 'Down': 1, 'Left': 1, 'Right': 1 } }
+
+                    Kernels = { 'none' :        torch.nn.Identity(),
+                                'quantum' :   quantum.quanvolution.QuantumConv2D(
+                                                    kernel_size = p['quanv_kernel_size'],
+                                                    stride = p['stride'],
+                                                    padding = paddings[p['quanv_kernel_size']],
+                                                    channels_out = p['channels_out'],
+                                                    ancilla= p['ancilla'],
+                                                    graph = p['connectivity'],
+                                                    entangle_method = p['entangle_method']
+                                                )
+                                }
+
+                    Kernels = { k : v for k, v in Kernels.items() if ( (k == 'none') and NoneBool ) or ( (k == 'quantum') and QuantumBool ) }
+                    print("Kernels to be used:", list(Kernels.keys()) )
+                    
+                    Latents = preprocess_and_save(
+                        B = exp_config['B'],
+                        DataLoaders = DataLoaders,
+                        kernels = Kernels,
+                        save_path = f"../QTransformer_Results_and_Datasets/transformer_results/quantum_datasets",
+                        mode = 'standard',
+                        model1 = None,
+                        p1 = p,
+                        num_channels = num_channels,
+                        device = exp_config['device'],
+                        concatenate_original = exp_config.get('concatenate_original', False)
+                    )
+                    processed_once = True
 
                 # --- Innermost Loop (model_iter) ---
                 for pack_model in itertools.product(*model_iter.values()):
 
-                    
-                    # Apply updates from model_iter
-                    current_params_model = dict(zip(model_iter.keys(), pack_model))
-                    if exp_config.get('square_arc', True):
-                        custom_update_dict( current_params_model, {'num_transf' : p['parallel'] } )
+                    for q_config in exp_config['q_config']:
 
-                    custom_update_dict(p, current_params_model)
+                        latent_train_dl, latent_val_dl, latent_test_dl, shape2 = Latents[q_config]
 
-                    print(f"\nCurrent params for model:", current_params_model)
+                        # Apply updates from model_iter
+                        current_params_model = dict(zip(model_iter.keys(), pack_model))
+                        if exp_config.get('square_arc', True):
+                            custom_update_dict( current_params_model, {'num_transf' : p['parallel'] } )
 
-                    oneortwo = 'current_results' if not current_exp_config['second_at_a_time'] else 'current_results2'
-                    aux_save_path = Path(f"../QTransformer_Results_and_Datasets/transformer_results/" + oneortwo + f"/grid_search{idx}")
-                    aux_save_path.mkdir(parents=True, exist_ok=True)
-                    
-                    # --- Model Definition ---
-                    model = quantum.vit.VisionTransformer(
-                        img_size=shape[-1], num_channels=shape[0], num_classes=current_exp_config['num_classes'],
-                        patch_size=p['patch_size'], hidden_size= shape[0]* p['patch_size']**2, num_heads=p['num_head'], Attention_N = p['Attention_N'],
-                        num_transformer_blocks=p['num_transf'], attention_selection= p['attention_selection'], selection_amount= p['selection_amount'], special_cls = p['special_cls'], 
-                        mlp_hidden_size=p['mlp_size'], quantum_mlp = p['quantum'], dropout = make_dropout(p['dropout']), channels_last=current_exp_config['channels_last'], quantum_classification = False,
-                        parallel = p['parallel'], RD = p['RD'], q_stride = p['q_stride'], connectivity = p['connectivity']
-                    )
+                        custom_update_dict(p, current_params_model)
 
-                    # --- Model Training ---
-                    print(f"Training model with attention_selection: {p['attention_selection']}")
-                    test_auc, test_acc, val_auc, val_acc, train_auc, train_acc, params = training.train_and_evaluate(
-                        model, train_dl, val_dl, test_dl, num_classes=current_exp_config['num_classes'],
-                        learning_rate=p['learning_rate'], num_epochs=current_exp_config['N'], device=current_exp_config['device'], mapping=False,
-                        res_folder=str(aux_save_path), hidden_size=p['hidden_size'], dropout=make_dropout(p['dropout']),
-                        num_heads=p['num_head'], patch_size=p['patch_size'], num_transf=p['num_transf'],
-                        mlp=p['mlp_size'], wd=p['weight_decay'], patience= p['patience'], scheduler_factor=p['scheduler_factor'], autoencoder=False,
-                        val_train_pond = p['val_train_pond'], augmentation_prob = p['augmentation_prob']
-                    )
+                        print(f"\nCurrent params for model:", current_params_model)
 
-                    print(f"\nPoint {idx+1} finished training. AUC: {test_auc:.5f}\n")
+                        oneortwo = 'current_results' if not current_exp_config['second_at_a_time'] else 'current_results2'
+                        aux_save_path = Path(f"../QTransformer_Results_and_Datasets/transformer_results/" + oneortwo + f"/grid_search{idx}")
+                        aux_save_path.mkdir(parents=True, exist_ok=True)
+                        
+                        hidden_size = len( p['channels_out'] ) * shape[0] * p['patch_size']**2
+                        # --- Model Definition ---
+                        model = quantum.vit.VisionTransformer(
+                            img_size=shape[-1], num_channels = shape[0], num_classes = current_exp_config['num_classes'],
+                            patch_size=p['patch_size'], hidden_size = hidden_size, num_heads=p['num_head'], Attention_N = p['Attention_N'],
+                            num_transformer_blocks=p['num_transf'], attention_selection= p['attention_selection'], selection_amount= p['selection_amount'], special_cls = p['special_cls'], 
+                            mlp_hidden_size=p['mlp_size'], quantum_mlp = p['quantum'], dropout = make_dropout(p['dropout']), channels_last=current_exp_config['channels_last'], quantum_classification = False,
+                            parallel = p['parallel'], RD = p['RD'], q_stride = p['q_stride'], connectivity = p['connectivity']
+                        )
 
-                    # --- Save Results (using new helper) ---
-                    row = {
-                        'idx': idx + 1, 'all_iter_idx': all_iter_counter,
-                        'test_auc': test_auc, 'test_acc': test_acc, 'val_auc': val_auc, 
-                        'val_acc': val_acc, 'train_auc': train_auc, 'train_acc': train_acc,
-                        '#params': params,
-                        **p # Add all current hyperparameters
-                    }
-                    print("Logging results:", row)
-                    log_experiment_row(csv_path, row, columns)
+                        # --- Model Training ---
+                        print(f"Training model with attention_selection: {p['attention_selection']}")
+                        test_auc, test_acc, val_auc, val_acc, train_auc, train_acc, params = training.train_and_evaluate(
+                            model, latent_train_dl, latent_val_dl, latent_test_dl, num_classes=current_exp_config['num_classes'],
+                            learning_rate=p['learning_rate'], num_epochs=current_exp_config['N'], device=current_exp_config['device'], mapping=False,
+                            res_folder=str(aux_save_path), hidden_size=p['hidden_size'], dropout=make_dropout(p['dropout']),
+                            num_heads=p['num_head'], patch_size=p['patch_size'], num_transf=p['num_transf'],
+                            mlp=p['mlp_size'], wd=p['weight_decay'], patience= p['patience'], scheduler_factor=p['scheduler_factor'], autoencoder=False,
+                            val_train_pond = p['val_train_pond'], augmentation_prob = p['augmentation_prob']
+                        )
 
-            # --- Send final report (using new helper) ---
-            send_telegram_report(
-                current_exp_config, 
-                csv_path=csv_path, 
-                columns=graph_columns,
-                title=f"{current_exp_config['experiment_name']} (all_iter {all_iter_counter})"
-            )
+                        print(f"\nPoint {idx+1} finished training. AUC: {test_auc:.5f}\n")
 
-        except Exception as e:
-             # --- Send error report (using new helper) ---
-             send_telegram_report(current_exp_config, error=e, progress=progress)
-             print(f"Error encountered in all_iter {all_iter_counter}: {e}")
-             # Continue to the next 'all_iter' loop if possible
-             continue
+                        # --- Save Results (using new helper) ---
+                        row = {
+                            'idx': idx + 1, 'q_config': q_config, 'all_iter_idx': all_iter_counter,
+                            'test_auc': test_auc, 'test_acc': test_acc, 'val_auc': val_auc, 
+                            'val_acc': val_acc, 'train_auc': train_auc, 'train_acc': train_acc,
+                            '#params': params,
+                            **p # Add all current hyperparameters
+                        }
+                        print("Logging results:", row)
+                        log_experiment_row(csv_path, row, columns)
+
+        # --- Send final report (using new helper) ---
+        send_telegram_report(
+            current_exp_config, 
+            csv_path=csv_path, 
+            columns=graph_columns,
+            title=f"{current_exp_config['experiment_name']} (all_iter {all_iter_counter})"
+        )
+
+        #except Exception as e:
+        #     # --- Send error report (using new helper) ---
+        #     send_telegram_report(current_exp_config, error=e, progress=progress)
+        #     print(f"Error encountered in all_iter {all_iter_counter}: {e}")
+        #     # Continue to the next 'all_iter' loop if possible
+        #     continue
 
 
 
@@ -358,8 +405,8 @@ def make_experiment_selformer(exp_config, p1_base, p2_base, all_iter={}, m1_iter
 
             # Determine if quantum processing is enabled based on exp_config['q_config']
             # exp_config['q_config'] can be a string or a list/tuple; handle both
-            NoneBool, PatchBool = 'none' in exp_config['q_config'], 'patchwise' in exp_config['q_config']
-            print(f"Current quantum configuration:\nNormal latent representations: {NoneBool}\nPatchwise Quantum latent representations: {PatchBool}")
+            NoneBool, QuantumBool = 'none' in exp_config['q_config'], 'patchwise' in exp_config['q_config']
+            print(f"Current quantum configuration:\nNormal latent representations: {NoneBool}\nPatchwise Quantum latent representations: {QuantumBool}")
 
             for pack_sel in itertools.product(*m1_iter.values()):
 
@@ -438,7 +485,7 @@ def make_experiment_selformer(exp_config, p1_base, p2_base, all_iter={}, m1_iter
                                                     )
                                     }
 
-                        Kernels = { k : v for k, v in Kernels.items() if ( (k == 'none') and NoneBool ) or ( (k == 'patchwise') and PatchBool ) }
+                        Kernels = { k : v for k, v in Kernels.items() if ( (k == 'none') and NoneBool ) or ( (k == 'patchwise') and QuantumBool ) }
                         print("Kernels to be used:", list(Kernels.keys()) )
                         
                         Latents = preprocess_and_save(
