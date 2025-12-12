@@ -6,3 +6,4 @@ DERMA/
 derma_results/
 Exp_Yolanda/
 venv/
+__pycache__/

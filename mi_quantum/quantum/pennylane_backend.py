@@ -1,113 +1,100 @@
 import torch
 import pennylane as qml
 import numpy as np
-
+from .graphs import graph_builder
 
 class QuantumLayer(torch.nn.Module):
     def __init__(
         self,
         num_qubits,
         graph='chain',
-        entangle_method='CNOT'
+        entangle_method='CNOT',
+        invert=True
     ):
         super().__init__()
         self.num_qubits = num_qubits
         self.entangle_method = entangle_method
-        self.graph_list = {
-
-                    2: {
-                        'chain': [[0, 1], [1, 0]],
-                        'star' : [[0, 1], [1, 0]]
-                    },
-                    3: {
-                        'chain': [[0, 1], [1, 2], [2, 0]],
-                        'star' : [[0, 1], [1, 2], [2, 0]]
-                    },
-                    4: {
-                        'chain': [[0, 1], [1, 2], [2, 3], [3, 0]],
-                        'star' : [[0, 1], [1, 2], [2, 3], [3, 0], [0, 2], [1, 3]],
-                        'X'   :  [[0, 3], [1, 2], [3, 0], [2, 1]]
-                    },
-                    5: {
-                        'chain': [[0, 1], [1, 2], [2, 3], [3, 4], [4, 0]],
-                        'star' : [[0, 1], [1, 2], [2, 3], [3, 4], [4, 0], [0, 2], [1, 3], [2, 4], [3, 0], [4, 1]]
-                    },
-                    6: {
-                        'chain':        [[0, 1], [1, 2], [2, 3], [3, 4], [4, 5], [5, 0]],
-                        'david_star':   [[0, 2], [1, 3], [2, 4], [3, 5], [4, 0], [5, 1] ],
-                        'entangled_triangle': [[0, 2], [1, 3], [2, 4], [3, 5], [4, 0], [5, 1], [0, 3]],
-                        'star' :        [[0, 1], [1, 2], [2, 3], [3, 4], [4, 5], [5, 0],
-                                         [0, 2], [1, 3], [2, 4], [3, 5], [4, 0], [5, 2]]
-                    },
-                    7: {
-                        'chain': [[0, 1], [1, 2], [2, 3], [3, 4], [4, 5], [5, 6], [6, 0]],
-                        'star' : [[0, 1], [1, 2], [2, 3], [3, 4], [4, 5], [5, 6], [6, 0],
-                                  [0, 2], [1, 3], [2, 4], [3, 5], [4, 6], [5, 0], [6, 1]]
-                    },
-                    8: {
-                        'chain': [[0, 1], [1, 2], [2, 3], [3, 4], [4, 5], [5, 6], [6, 7], [7, 0]],
-                        'star' : [[0, 1], [1, 2], [2, 3], [3, 4], [4, 5], [5, 6], [6, 7], [7, 0],
-                                  [0, 2], [1, 3], [2, 4], [3, 5], [4, 6], [5, 7], [6, 0], [7, 1]]
-                    },
-                    9: {
-                        'chain' : [[0, 1], [1, 2], [2, 3], [3, 4], [4, 5], [5, 6], [6, 7], [7, 8], [8, 0]],
-                        'star'  : [[0, 1], [1, 2], [2, 3], [3, 4], [4, 5], [5, 6], [6, 7], [7, 8], [8, 0],
-                                   [0, 2], [1, 3], [2, 4], [3, 5], [4, 6], [5, 7], [6, 8], [7, 0], [8, 1]],
-                        'king'  : [[0, 2], [2, 8], [8, 6], [6, 0], [1, 5], [5, 7], [7, 3], [3, 1], [0, 4],
-                                   [1, 4], [2, 4], [3, 4], [5, 4], [6, 4], [7, 4], [8, 4]],
-                        'center': [[0, 4], [1, 4], [2, 4], [3, 4], [5, 4], [6, 4], [7, 4], [8, 4]]
-                    },
-                    10: {
-                        'chain': [[0, 1], [1, 2], [2, 3], [3, 4], [4, 5], [5, 6], [6, 7], [7, 8], [8, 9], [9, 0]],
-                        'star' : [[0, 1], [1, 2], [2, 3], [3, 4], [4, 5], [5, 6], [6, 7], [7, 8], [8, 9], [9, 0],
-                                  [0, 2], [1, 3], [2, 4], [3, 5], [4, 6], [5, 7], [6, 8], [7, 9], [8, 0], [9, 1]]
-                    }
-                }
-
-        self.graph = self.graph_list[num_qubits][graph] if isinstance(graph,str) else graph if isinstance(graph, list) else None
-        if self.graph == None:
-            raise ValueError(f'Graph must be a string or a list containing the edges of the graph, but got {graph}. Please enter a valid list or a string such as:\n "chain", "star"... ')
         
+        # --- 1. Robust Graph Loading ---
+        if isinstance(graph, str):
+            # Build graph from string
+            self.graph_data = graph_builder(graph, num_qubits)
+        elif isinstance(graph, dict):
+            # Validate dict
+            if 'edges' not in graph or 'weights' not in graph:
+                raise ValueError("Graph dict must contain 'edges' and 'weights'.")
+            self.graph_data = graph
+        else:
+            raise ValueError(f"Invalid graph input: {graph}")
+
+        # --- 2. Extract Data (and ensure valid lists/arrays) ---
+        self.edges = self.graph_data['edges']
+        self.weights_data = self.graph_data['weights'] 
+
+        # --- 3. Device & Circuit ---
         dev = qml.device('default.qubit', wires=num_qubits)
 
-        # Quantum circuit
         @qml.qnode(dev, interface="torch", diff_method="backprop")
-        def circuit_(inputs, weights):
-   
-            inputs = np.pi * torch.clamp(inputs, min=0, max=1)
-            qml.AngleEmbedding(inputs, wires=range(num_qubits), rotation='Y')
+        def circuit_(inputs, qnode_weights):
+            
+            # --- Input Embedding ---
+            # Pre-processing input
+            inputs = np.pi * (1 - invert + (2 * invert - 1) * torch.clamp(inputs, min=0, max=1))
+            
+            if self.entangle_method == 'edges':
+                # WARNING: This logic is hardcoded for 4 qubits. 
+                # Ensure num_qubits == 4 if using this method.
+                exaggeration = 3
+                qml.RY(exaggeration * (inputs[..., 0] - inputs[..., 1] + inputs[..., 2] - inputs[..., 3]), wires=0)
+                qml.RY(exaggeration * (inputs[..., 0] - inputs[..., 2] + inputs[..., 1] - inputs[..., 3]), wires=2)
+                qml.RY(inputs[..., 1], wires=1)
+                qml.RY(inputs[..., 3], wires=3)
+                qml.CRY((np.pi - inputs[..., 3]), wires=[0, 3])
+                qml.CRY((np.pi - inputs[..., 3]), wires=[2, 3])
+            
+            else:
+                # Standard Angle Embedding
+                qml.AngleEmbedding(inputs, wires=range(self.num_qubits), rotation='Y')
 
-            for i, pair in enumerate(self.graph): 
-                if self.entangle_method == 'CNOT':    
-                    qml.CNOT(wires=[pair[0], pair[1]])
-                elif self.entangle_method == 'CRX':
-                    qml.CRX(np.pi/3, wires=[pair[0], pair[1]]) 
-                elif self.entangle_method == 'CRY':
-                    qml.CRY(np.pi/3, wires=[pair[0], pair[1]]) 
-                elif self.entangle_method == 'SEL': # Stands for StronglyEntanglingLayers
-                    qml.StronglyEntanglingLayers(weights, wires=range(num_qubits), ranges = [1])
+                # --- Entanglement Layers ---
+                if self.entangle_method == 'SEL':
+                    # Apply ONCE, not per edge
+                    qml.StronglyEntanglingLayers(qnode_weights, wires=range(self.num_qubits), ranges=[1])
+                
+                else:
+                    # Iterate over EDGES, not the dict keys
+                    for i, edge in enumerate(self.edges):
+                        u, v = edge[0], edge[1]
+                        
+                        # Use the specific weight for this edge if available
+                        # (Fallback to pi/3 if you prefer, but using the weight map is usually better)
+                        w = self.weights_data[i] if i < len(self.weights_data) else (np.pi/3)
 
-            return [ qml.expval(qml.PauliZ(i)) for i in range(num_qubits)]
+                        if self.entangle_method == 'CNOT':    
+                            qml.CNOT(wires=[u, v])
+                        elif self.entangle_method == 'CRX':
+                            qml.CRX(w, wires=[u, v]) 
+                        elif self.entangle_method == 'CRY':
+                            qml.CRY(w, wires=[u, v])
 
-        weight_shape =  (1, num_qubits, 3) if self.entangle_method == 'SEL' else (1,)
+            # Return expectation values
+            return [qml.expval(qml.PauliZ(i)) for i in range(self.num_qubits)]
 
-        self.magic = qml.qnn.TorchLayer(circuit_, {"weights": weight_shape})
+        # --- 4. Setup Weights ---
+        weight_shape = (1, num_qubits, 3) if self.entangle_method == 'SEL' else (1,)
+        
+        # Create the QNode
+        self.magic = qml.qnn.TorchLayer(circuit_, {"qnode_weights": weight_shape})
 
-        # Freeze weights (non-trainable) (just in case, although it should'nt be necessary except in SEL case)
-
+        # Freeze weights (Reservoir Computing style)
         for param in self.magic.qnode_weights.values():
             param.data.zero_()
             param.requires_grad = False
 
-
     def forward(self, inputs):
-        
-        # Vectorized map over time and batch dimensions
         if inputs.ndim == 3:
-            # Assume shape is (batch_size, time_steps, num_qubits)
             return torch.vmap(torch.vmap(self.magic))(inputs)
         elif inputs.ndim == 2:
-            # Assume shape is (batch_size, num_qubits)
             return torch.vmap(self.magic)(inputs)
         elif inputs.ndim == 1:
             return self.magic(inputs)

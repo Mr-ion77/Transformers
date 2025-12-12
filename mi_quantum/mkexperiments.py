@@ -25,6 +25,19 @@ import mi_quantum.training as training
 from TelegramBot import SendToTelegram
 
 
+# Define a proper PyTorch class
+class CosineEncoding(torch.nn.Module):
+    def __init__(self, nesting = 1):
+        super(CosineEncoding, self).__init__()
+        self.nesting = nesting
+    def forward(self, x):
+        out = x
+        for _ in range(self.nesting):
+            out = torch.cos(out * torch.pi/2)
+        return out
+
+
+
 # --- Global Constants ---
 DEFAULT_COLUMNS = [
     'test_auc_sel', 'test_acc_sel' ,'test_auc', 'test_acc', 'val_auc', 'val_acc', 'train_auc', 'train_acc', '#params'
@@ -62,16 +75,16 @@ def make_directories_for_experiment(variant = 'selformer', exp_config = None, p1
     with open(os.path.join(exp_dir, 'hyperparameters.json'), 'w') as f:
         f.write(f"Experiment Name: {exp_config['experiment_name']}\nBatch Size: {exp_config['B']}\n")
         if p1:
-             f.write(f"Number of Epochs Selector: {exp_config.get('N1', 'N/A')}\n")
+             f.write(f"Number of Epochs Selector: {exp_config.get('N1' if variant == 'selformer' else 'N', 'N/A')}\n")
              f.write('\nHyperparameters for Selector\n')
              json.dump(p1, f, indent=4)
         if p2:
-             f.write(f"Number of Epochs Classifier: {exp_config.get('N2', 'N/A')}\n")
+             f.write(f"Number of Epochs Classifier: {exp_config.get('N2' if variant == 'selformer' else 'N', 'N/A')}\n")
              f.write('\nHyperparameters for Classifier\n')
              json.dump(p2, f, indent=4)
         if exp_config:
             f.write('\nGeneral settings of the simulation:\n')
-            json.dump(p2, f, indent=4)
+            json.dump(exp_config, f, indent=4, default = list)
         
         # Handle iter blocks
         iter_blocks = [
@@ -164,7 +177,6 @@ def log_experiment_row(csv_path, row_data, column_order):
 def make_experiment_transformer(exp_config, p_base, all_iter={}, data_iter = {}, model_iter={}, graph_columns=['attention_selection', 'test_auc']):
     
     root_id = exp_config['experiment_id']
-    
     # Define columns for CSV logging
     columns = ['idx', 'all_iter_idx', 'q_config'] + list(all_iter.keys()) + list(data_iter.keys()) + list(model_iter.keys()) + DEFAULT_COLUMNS
     try:
@@ -184,7 +196,9 @@ def make_experiment_transformer(exp_config, p_base, all_iter={}, data_iter = {},
         
         #try:
 
-        NoneBool, QuantumBool = 'none' in exp_config['q_config'], 'quantum' in exp_config['q_config']
+        NoneBool, QuantumBool, CosBool = 'none' in exp_config['q_config'], 'quantum' in exp_config['q_config'], 'cosine' in exp_config['q_config']
+        print(f"Current quantum configuration:\nNormal latent representations: {NoneBool}\nQuantum latent representations: {QuantumBool},\nCosine Encoding latent representations: {CosBool}\n")
+
 
         # --- Create directories and CSV file ---
         csv_path, save_path = make_directories_for_experiment(
@@ -192,6 +206,7 @@ def make_experiment_transformer(exp_config, p_base, all_iter={}, data_iter = {},
             exp_config=current_exp_config, 
             p1=p, # Use p1 slot for the single param dict
             all_iter=all_iter, 
+            data_iter= data_iter,
             m2_iter=model_iter, # m2_iter for consistency, as it's the "model" iter
             columns=columns
         )
@@ -224,24 +239,31 @@ def make_experiment_transformer(exp_config, p_base, all_iter={}, data_iter = {},
                 if pack_data or not processed_once:
 
                     current_params_data = dict(zip(data_iter.keys(), pack_data))
+                    if current_params_data.get('channels_out', [None]) == [1] and current_params_data.get('entangle_method', [None]) == 'edges' or current_params_data.get('channels_out', [None]) == [3] and current_params_data.get('entangle_method', [None]) == 'CRX':
+                        continue
+
                     custom_update_dict(p, current_params_data)
 
                     DataLoaders = [notrans_train_dl, val_dl, test_dl]
                     paddings = { 2 : { 'Up': 1, 'Down': 0, 'Left': 1, 'Right': 0 }, 3 : { 'Up': 1, 'Down': 1, 'Left': 1, 'Right': 1 } }
 
-                    Kernels = { 'none' :        torch.nn.Identity(),
-                                'quantum' :   quantum.quanvolution.QuantumConv2D(
+                    Kernels = { 'none'      :   torch.nn.Identity(),
+                                'quantum'   :   quantum.quanvolution.QuantumConv2D(
                                                     kernel_size = p['quanv_kernel_size'],
                                                     stride = p['stride'],
                                                     padding = paddings[p['quanv_kernel_size']],
                                                     channels_out = p['channels_out'],
                                                     ancilla= p['ancilla'],
                                                     graph = p['connectivity'],
-                                                    entangle_method = p['entangle_method']
-                                                )
+                                                    entangle_method = p['entangle_method'], 
+                                                    invert_embedding = p['invert_embedding']
+                                                ),
+                                'cosine'    :   CosineEncoding(),
+                                'cosine2'   :   CosineEncoding(),
+                                
                                 }
 
-                    Kernels = { k : v for k, v in Kernels.items() if ( (k == 'none') and NoneBool ) or ( (k == 'quantum') and QuantumBool ) }
+                    Kernels = { k : v for k, v in Kernels.items() if ( (k == 'none') and NoneBool ) or ( (k == 'quantum') and QuantumBool ) or ( (k == 'cosine') and CosBool ) or ( (k == 'cosine2') and ('cosine2' in current_exp_config['q_config']) )}
                     print("Kernels to be used:", list(Kernels.keys()) )
                     
                     Latents = preprocess_and_save(
@@ -405,8 +427,8 @@ def make_experiment_selformer(exp_config, p1_base, p2_base, all_iter={}, m1_iter
 
             # Determine if quantum processing is enabled based on exp_config['q_config']
             # exp_config['q_config'] can be a string or a list/tuple; handle both
-            NoneBool, QuantumBool = 'none' in exp_config['q_config'], 'patchwise' in exp_config['q_config']
-            print(f"Current quantum configuration:\nNormal latent representations: {NoneBool}\nPatchwise Quantum latent representations: {QuantumBool}")
+            NoneBool, QuantumBool, CosBool = 'none' in exp_config['q_config'], 'patchwise' in exp_config['q_config'], 'cosine' in exp_config['q_config']
+            print(f"Current quantum configuration:\nNormal latent representations: {NoneBool}\nPatchwise Quantum latent representations: {QuantumBool},\nCosine Encoding latent representations: {CosBool}\n")
 
             for pack_sel in itertools.product(*m1_iter.values()):
 
@@ -481,11 +503,13 @@ def make_experiment_selformer(exp_config, p1_base, p2_base, all_iter={}, m1_iter
                                                         channels_out = p1['1_channels_out'],
                                                         ancilla= p1['1_ancilla'],
                                                         graph = p1['1_connectivity'],
-                                                        entangle_method = p1['1_entangle_method']
-                                                    )
+                                                        entangle_method = p1['1_entangle_method'], 
+                                                        invert_embedding = p1['1_invert_embedding'] 
+                                                    ),
+                                    'cosine' :      CosineEncoding()
                                     }
 
-                        Kernels = { k : v for k, v in Kernels.items() if ( (k == 'none') and NoneBool ) or ( (k == 'patchwise') and QuantumBool ) }
+                        Kernels = { k : v for k, v in Kernels.items() if ( (k == 'none') and NoneBool ) or ( (k == 'patchwise') and QuantumBool ) or ( (k == 'cosine') and CosBool )}
                         print("Kernels to be used:", list(Kernels.keys()) )
                         
                         Latents = preprocess_and_save(

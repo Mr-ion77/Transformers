@@ -5,16 +5,18 @@ if __name__ == "__main__":
     
     # 1. Define Base Configs
     exp_config_base = {
-        'experiment_id': 'q_stride_redo',
-        'experiment_name': 'Striding effect on quantum transformer',
+        'experiment_id': 'crx_vs_cosine',
+        'experiment_name': 'Is really CRX better than just cosine?',
         'B': 256,
         'N': 125, # Num epochs
         'num_experiments': 20,
         'num_classes': 7,
         'square' : True,
+        'pixels' : 28,
+        'q_config' : {'cosine2'},
         'channels_last': False,
         'device': 'cuda:0' if torch.cuda.is_available() else 'cpu',
-        'second_at_a_time' : False,
+        'second_at_a_time' : True,
         'send_telegram': True
     }
 
@@ -25,21 +27,28 @@ if __name__ == "__main__":
         'num_transf': 2,
         'selection_amount': 25,
         'special_cls': 'false',
-        'mlp_size': 4,
-        'quantum': True,
+        'mlp_size': 6,
+        'quantum': False,
         'dropout': 0.225,
         'parallel': 2,
         'attention_selection': 'filter',
         'RD': 1,
-        'q_stride': 1,
+        'q_stride': 2,
         'connectivity': 'star',
         'learning_rate': 0.0025,
-        'hidden_size': 48, # Example, might be derived
+        'hidden_size': 48,          # Example, might be derived
         'weight_decay': 1e-7,
         'patience': -1,
         'scheduler_factor': 0.985,
         'augmentation_prob' : 0, 
         'val_train_pond' : 1,
+        'quanv_kernel_size' : 2,
+        'stride' : 1,
+        'channels_out' : [1],
+        'ancilla': 0,
+        'graph' : 'star',
+        'entangle_method' : 'CRX',
+        'invert_embedding' : True
     }
 
     # 2. Define Iterables
@@ -47,12 +56,15 @@ if __name__ == "__main__":
 
     }
     
-    model_iter = {
-        'quantum' : [True, False],
-        'q_stride': [1, 2, 3, 4],
+    data_iter = {
+       
     }
 
-    graph_columns = ['quantum', 'q_stride', 'test_auc']
+    model_iter = {
+        'dropout': [0.225, 0.3, 0.375],
+    }
+
+    graph_columns = ['q_config', 'dropout', 'test_auc']
 
     # 3. Run Experiment
     print("--- Starting Refactored Transformer Experiment ---")
@@ -60,6 +72,7 @@ if __name__ == "__main__":
         exp_config_base, 
         p_base, 
         all_iter=all_iter, 
+        data_iter= data_iter,
         model_iter=model_iter,
         graph_columns=graph_columns
     )
