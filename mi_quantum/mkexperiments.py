@@ -590,9 +590,20 @@ def make_experiment_selformer(exp_config, p1_base, p2_base, all_iter={}, m1_iter
                                     attention_selection= p2['attention_selection'], special_cls = p2['special_cls'], mlp_hidden_size=p2['mlp_size'], quantum_mlp = False, 
                                     dropout = make_dropout(p2['dropout']), channels_last= exp_config['channels_last'], quantum_classification = False, parallel_mode = 'copy' if config == 'none' else p2['parallel_mode'],
                                     parallel = p2['parallel'], RD = p2['RD'], q_stride = p2['q_stride'], connectivity = 'chain', patch_embedding_required = 'flatten' if exp_config['augmenting'] else 'false',
-                                )
+                                ) if not exp_config['use_selector_as_class'] else model1
+
+                                if exp_config['use_selector_as_class']:
+                                    model2.patch_embedding_required = 'false'
+                                    model2.trainlosslist = []
+                                    model2.trauclist = []
+                                    model2.tracclist = []
+                                    model2.vallosslist = []
+                                    model2.auclist = []
+                                    model2.acclis = []
+                                    model2.dropout = make_dropout(p2['dropout'])
 
                                 print('\nTraining second model: classifier ViT on latent representations\n')
+                                print(f'\nUsing weights of first model? : {exp_config['use_selector_as_class']}')
                                 print(f'QUANTUM SETTING IS: {config} and current lr is: {p2["learning_rate"]}')
                                 
                                 # Train second model

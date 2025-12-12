@@ -731,7 +731,7 @@ class VisionTransformer(nn.Module):
         elif self.parallel_mode == 'quantum':
             Q = self.parallel
             assert shape[-2] % self.parallel == 0, \
-                f"When parameter 'paralel_mode' = 'quantum', parameter 'paralel' is expected to be the amount of stacked versions of the original image (Q + concatenate_original)"
+                f"When parameter 'parallel_mode' = 'quantum', parameter 'parallel' is expected to be the amount of stacked versions of the original image (Q + concatenate_original)"
 
             x_aux = x.reshape( shape[0], Q , -1, shape[-1] ).permute(1, 0, 2, 3).contiguous() # [Q, B, S, D] , Q = Quantum versions of the image
             cls_token = (self.cls_token + self.pos_embedding[:, 0, :]).unsqueeze(0).expand( Q, x.shape[0], -1, -1 )
