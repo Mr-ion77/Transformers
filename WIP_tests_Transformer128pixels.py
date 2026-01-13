@@ -5,15 +5,15 @@ if __name__ == "__main__":
     
     # 1. Define Base Configs
     exp_config_base = {
-        'experiment_id': 'first_search_for_128',
-        'experiment_name': 'Edges search: Dropout and Learning Rate with Weight Decay',
+        'experiment_id': '128x128/quantum_vs_none',
+        'experiment_name': 'Quantum vs None (CRX)',
         'B': 256,
         'N': 125, # Num epochs
         'num_experiments': 20,
         'num_classes': 7,
         'square' : True,
         'pixels' : 128,
-        'q_config' : {'none'},
+        'q_config' : {'none', 'quantum'},
         'channels_last': False,
         'device': 'cuda:0' if torch.cuda.is_available() else 'cpu',
         'second_at_a_time' : True,
@@ -27,15 +27,15 @@ if __name__ == "__main__":
         'num_transf': 2,
         'selection_amount': 32,
         'special_cls': 'false',
-        'mlp_size': 4,
+        'mlp_size': 5,
         'quantum': False,
-        'dropout': 0.225,
+        'dropout': 0.175,
         'parallel': 2,
         'attention_selection': 'filter',
         'RD': 1,
         'q_stride': 1,
-        'connectivity': 'star',
-        'learning_rate': 0.0025,
+        'connectivity': {'edges': [[0, 1], [1, 2], [2, 3], [3, 0], [0, 2], [1, 3]], 'weights': [torch.pi/3] * 6},  # Example, might be derived
+        'learning_rate': 7.5e-5,
         'hidden_size': 48,          # Example, might be derived
         'weight_decay': 1e-7,
         'patience': -1,
@@ -44,10 +44,10 @@ if __name__ == "__main__":
         'val_train_pond' : 1,
         'quanv_kernel_size' : 2,
         'stride' : 1,
-        'channels_out' : [3],
+        'channels_out' : [0],
         'ancilla': 0,
         'graph' : 'star',
-        'entangle_method' : 'edges',
+        'entangle_method' : 'CRX',
         'invert_embedding' : True
     }
 
@@ -59,14 +59,14 @@ if __name__ == "__main__":
     # Repetir amb més dropout
     
     data_iter = {
-
+        'channels_out' : [ [0], [1], [2], [3]]
     }
 
     model_iter = {
-       'dropout': [0.15 ,0.225, 0.3, 0.375], 'learning_rate': [  2.5e-4, 7.5e-4, 2.5e-3  ], 'mlp_size': [ 3, 5, 7, 9 ]
+
     }
 
-    graph_columns = ['dropout', 'mlp_size', 'learning_rate', 'test_auc']
+    graph_columns = ['q_config', 'channels_out', 'test_auc']
 
     # 3. Run Experiment
     print("--- Starting Refactored Transformer Experiment ---")

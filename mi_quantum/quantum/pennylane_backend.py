@@ -9,11 +9,16 @@ class QuantumLayer(torch.nn.Module):
         num_qubits,
         graph='chain',
         entangle_method='CNOT',
-        invert=True
+        invert=True, 
+        train_q = False,
+        train_r = False
     ):
         super().__init__()
         self.num_qubits = num_qubits
         self.entangle_method = entangle_method
+        self.train_q = train_q
+        self.train_r = train_r
+        print(f"Quantum layer trainable? : {self.train_q or self.train_r}")
         
         # --- 1. Robust Graph Loading ---
         if isinstance(graph, str):
@@ -35,7 +40,7 @@ class QuantumLayer(torch.nn.Module):
         dev = qml.device('default.qubit', wires=num_qubits)
 
         @qml.qnode(dev, interface="torch", diff_method="backprop")
-        def circuit_(inputs, qnode_weights):
+        def circuit_(inputs, weights):
             
             # --- Input Embedding ---
             # Pre-processing input
@@ -59,37 +64,63 @@ class QuantumLayer(torch.nn.Module):
                 # --- Entanglement Layers ---
                 if self.entangle_method == 'SEL':
                     # Apply ONCE, not per edge
-                    qml.StronglyEntanglingLayers(qnode_weights, wires=range(self.num_qubits), ranges=[1])
+                    qml.StronglyEntanglingLayers(weights, wires=range(self.num_qubits), ranges=[1])
                 
                 else:
-                    # Iterate over EDGES, not the dict keys
-                    for i, edge in enumerate(self.edges):
-                        u, v = edge[0], edge[1]
-                        
-                        # Use the specific weight for this edge if available
-                        # (Fallback to pi/3 if you prefer, but using the weight map is usually better)
-                        w = self.weights_data[i] if i < len(self.weights_data) else (np.pi/3)
+                    # If using SEL, pass the provided weight tensor directly
+                    if self.entangle_method == 'SEL':
+                        qml.StronglyEntanglingLayers(weights, wires=range(self.num_qubits), ranges=[1])
+                    else:
+                        # If layer is trainable, apply a per-qubit unitary rotation (U3/Rot)
+                        # Expect `weights` to have shape (1, num_qubits, 3) when trainable.
+                        if self.train_q:
+                            # Normalize shapes: accept (1, N, 3) or (N, 3)
+                            try:
+                                if hasattr(weights, 'ndim') and weights.ndim == 3 and weights.shape[0] == 1:
+                                    weights = weights[0]
+                            except Exception:
+                                pass
 
-                        if self.entangle_method == 'CNOT':    
-                            qml.CNOT(wires=[u, v])
-                        elif self.entangle_method == 'CRX':
-                            qml.CRX(w, wires=[u, v]) 
-                        elif self.entangle_method == 'CRY':
-                            qml.CRY(w, wires=[u, v])
+                            for q in range(self.num_qubits):
+                                theta = weights[3*q]
+                                phi = weights[3*q+1]
+                                lam = weights[3*q+2]
+                                qml.Rot(theta, phi, lam, wires=q)
+
+                        # Iterate over EDGES, not the dict keys, for entangling gates
+                        for i, edge in enumerate(self.edges):
+                            u, v = edge[0], edge[1]
+
+                            # Use the specific weight for this edge if available
+                            if not self.train_r:
+                                w = self.weights_data[i] if i < len(self.weights_data) else (np.pi / 3)
+                            else:
+                                w = weights[3*self.num_qubits*self.train_q + i]
+
+                            if self.entangle_method == 'CNOT':
+                                qml.CNOT(wires=[u, v])
+                            elif self.entangle_method == 'CRX':
+                                qml.CRX(w, wires=[u, v])
+                            elif self.entangle_method == 'CRY':
+                                qml.CRY(w, wires=[u, v])
 
             # Return expectation values
             return [qml.expval(qml.PauliZ(i)) for i in range(self.num_qubits)]
 
         # --- 4. Setup Weights ---
-        weight_shape = (1, num_qubits, 3) if self.entangle_method == 'SEL' else (1,)
+        # If using SEL or per-qubit trainable rotations, expose a weight tensor
+        # with one layer of shape (1, num_qubits, 3). Otherwise provide a dummy scalar shape.
+        shapes = {'SEL': (1, num_qubits, 3), 'train': (num_qubits * 3 * self.train_q + len(self.edges) * self.train_r)}
+        weight_shape = shapes['SEL'] if self.entangle_method == 'SEL' else shapes['train']
         
         # Create the QNode
-        self.magic = qml.qnn.TorchLayer(circuit_, {"qnode_weights": weight_shape})
+        self.magic = qml.qnn.TorchLayer(circuit_, {"weights": weight_shape})
 
         # Freeze weights (Reservoir Computing style)
-        for param in self.magic.qnode_weights.values():
-            param.data.zero_()
-            param.requires_grad = False
+        # for param in self.magic.parameters():
+        #     param.data.zero_()
+        #     param.requires_grad = False
+        print(f"Quantum Layer Info: train_q={self.train_q} | Weight Shape={weight_shape} | Layer Params={sum(p.numel() for p in self.magic.parameters())} | Entangle Method : {self.entangle_method}")
 
     def forward(self, inputs):
         if inputs.ndim == 3:

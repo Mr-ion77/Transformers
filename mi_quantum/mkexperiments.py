@@ -43,6 +43,10 @@ DEFAULT_COLUMNS = [
     'test_auc_sel', 'test_acc_sel' ,'test_auc', 'test_acc', 'val_auc', 'val_acc', 'train_auc', 'train_acc', '#params'
 ]
 
+default_redundancies = [
+    {'quantum': False, 'train_q': [False, True], 'train_r': [False, True], 'invert_embedding': [False, True]},
+]
+
 # --- Core Helper Functions (from your original script) ---
 
 def make_dropout(drop):
@@ -84,7 +88,7 @@ def make_directories_for_experiment(variant = 'selformer', exp_config = None, p1
              json.dump(p2, f, indent=4)
         if exp_config:
             f.write('\nGeneral settings of the simulation:\n')
-            json.dump(exp_config, f, indent=4, default = list)
+            json.dump(exp_config, f, indent=4, default = str)
         
         # Handle iter blocks
         iter_blocks = [
@@ -102,6 +106,33 @@ def make_directories_for_experiment(variant = 'selformer', exp_config = None, p1
 
     return csv_path, exp_dir
 
+def is_redundant(p, iterator, redundancies):
+    """
+    Checks if the current parameter set 'p' is a redundant combination 
+    based on a list of redundancy rules.
+    """
+    for rule in redundancies:
+        # 1. Identify the trigger (the key with a single value)
+        # and the dependents (the keys with lists of redundant values)
+        trigger_keys = [k for k, v in rule.items() if not isinstance(v, list)]
+        dependent_keys = [k for k, v in rule.items() if isinstance(v, list) and k in iterator.keys()]
+        
+        if not (trigger_keys and dependent_keys):
+            continue
+            
+        # Check if ALL triggers match the current 'p'
+        # (This allows for complex triggers like {'quantum': False, 'parallel': 1})
+        matches_trigger = all(p.get(k) == rule[k] for k in trigger_keys)
+        
+        if matches_trigger:
+            # If the trigger matches, we only allow the 'canonical' trial.
+            # The canonical trial is where every dependent param equals the FIRST item in its list.
+            for d_key in dependent_keys:
+                canonical_value = rule[d_key][0]
+                if p.get(d_key) != canonical_value:
+                    return True  # It is redundant, skip it!
+                    
+    return False # No redundancy rules triggered
 
 def iterate_all_iter(root_id, base_exp_config, all_iter, p_bases):
     """
@@ -174,7 +205,7 @@ def log_experiment_row(csv_path, row_data, column_order):
     df.to_csv(csv_path, mode='a', header=False, index=False)
 
 
-def make_experiment_transformer(exp_config, p_base, all_iter={}, data_iter = {}, model_iter={}, graph_columns=['attention_selection', 'test_auc']):
+def make_experiment_transformer(exp_config, p_base, all_iter={}, data_iter = {}, model_iter={}, redundancies = default_redundancies, graph_columns=['attention_selection', 'test_auc']):
     
     root_id = exp_config['experiment_id']
     # Define columns for CSV logging
@@ -289,8 +320,8 @@ def make_experiment_transformer(exp_config, p_base, all_iter={}, data_iter = {},
 
                         # Apply updates from model_iter
                         current_params_model = dict(zip(model_iter.keys(), pack_model))
-                        if exp_config.get('square_arc', True):
-                            custom_update_dict( current_params_model, {'num_transf' : p['parallel'] } )
+                        if exp_config.get('square', True):
+                            custom_update_dict( current_params_model, {'num_transf' : current_params_model.get('parallel',p['parallel']) } )
 
                         custom_update_dict(p, current_params_model)
 
@@ -302,25 +333,91 @@ def make_experiment_transformer(exp_config, p_base, all_iter={}, data_iter = {},
                         
                         hidden_size = len( p['channels_out'] ) * shape[0] * p['patch_size']**2
                         # --- Model Definition ---
-                        model = quantum.vit.VisionTransformer(
-                            img_size=shape[-1], num_channels = shape[0], num_classes = current_exp_config['num_classes'],
-                            patch_size=p['patch_size'], hidden_size = hidden_size, num_heads=p['num_head'], Attention_N = p['Attention_N'],
-                            num_transformer_blocks=p['num_transf'], attention_selection= p['attention_selection'], selection_amount= p['selection_amount'], special_cls = p['special_cls'], 
-                            mlp_hidden_size=p['mlp_size'], quantum_mlp = p['quantum'], dropout = make_dropout(p['dropout']), channels_last=current_exp_config['channels_last'], quantum_classification = False,
-                            parallel = p['parallel'], RD = p['RD'], q_stride = p['q_stride'], connectivity = p['connectivity']
-                        )
+                        # 1. Prepare base arguments from p (only those that exist)
+                        # We use .get() or manual mapping for keys that don't match exactly 
+                        # or need transformation (like dropout)
+                        # --- Helper: Map 'p' dictionary to function arguments ---
+                        if is_redundant(p, model_iter, redundancies):
+                            print("Skipping redundant parameter combination:", p)
+                            continue
 
-                        # --- Model Training ---
-                        print(f"Training model with attention_selection: {p['attention_selection']}")
-                        test_auc, test_acc, val_auc, val_acc, train_auc, train_acc, params = training.train_and_evaluate(
-                            model, latent_train_dl, latent_val_dl, latent_test_dl, num_classes=current_exp_config['num_classes'],
-                            learning_rate=p['learning_rate'], num_epochs=current_exp_config['N'], device=current_exp_config['device'], mapping=False,
-                            res_folder=str(aux_save_path), hidden_size=p['hidden_size'], dropout=make_dropout(p['dropout']),
-                            num_heads=p['num_head'], patch_size=p['patch_size'], num_transf=p['num_transf'],
-                            mlp=p['mlp_size'], wd=p['weight_decay'], patience= p['patience'], scheduler_factor=p['scheduler_factor'], autoencoder=False,
-                            val_train_pond = p['val_train_pond'], augmentation_prob = p['augmentation_prob']
-                        )
+                        def build_kwargs(source, mapping):
+                            """Only includes keys from source if they exist, mapped to the correct name."""
+                            return {target_key: source[p_key] for p_key, target_key in mapping.items() if p_key in source}
 
+                        # 1. Define Model Arguments
+                        # Fixed arguments (required or from current_exp_config)
+                        model_kwargs = {
+                            'img_size': shape[-1],
+                            'num_channels': shape[0],
+                            'num_classes': current_exp_config['num_classes'],
+                            'hidden_size': hidden_size,
+                            'channels_last': current_exp_config['channels_last'],
+                            'quantum_classification': False,
+                        }
+
+                        # Dynamic arguments from p (maps 'p' key name -> VisionTransformer __init__ name)
+                        model_map = {
+                            'patch_size': 'patch_size',
+                            'num_head': 'num_heads',
+                            'num_transf': 'num_transformer_blocks',
+                            'mlp_size': 'mlp_hidden_size',
+                            'Attention_N': 'Attention_N',
+                            'quantum': 'quantum_mlp',
+                            'train_q': 'train_q',
+                            'train_r': 'train_r',
+                            'entangle_method': 'entangle_method',
+                            'invert_embedding': 'invert_embedding',
+                            'RD': 'RD',
+                            'attention_selection': 'attention_selection',
+                            'selection_amount': 'selection_amount',
+                            'special_cls': 'special_cls',
+                            'parallel': 'parallel',
+                            'q_stride': 'q_stride',
+                            'connectivity': 'connectivity'
+                        }
+
+                        model_kwargs.update(build_kwargs(p, model_map))
+
+                        # Handle dropout separately since it uses a transformation function
+                        if 'dropout' in p:
+                            model_kwargs['dropout'] = make_dropout(p['dropout'])
+
+                        # Initialize Model
+                        model = quantum.vit.VisionTransformer(**model_kwargs)
+                        print("Model initialized with parameters:", model_kwargs)
+                        # 2. Define Training Arguments
+                        train_kwargs = {
+                            'model': model,
+                            'train_dataloader': latent_train_dl,
+                            'valid_dataloader': latent_val_dl,
+                            'test_dataloader': latent_test_dl,
+                            'num_classes': current_exp_config['num_classes'],
+                            'num_epochs': current_exp_config['N'],
+                            'device': current_exp_config['device'],
+                            'res_folder': str(aux_save_path),
+                            'mapping': False,
+                            'autoencoder': False
+                        }
+
+                        # Dynamic arguments from p ( maps 'p' key name -> train_and_evaluate name )
+                        train_map = {
+                            'learning_rate' : 'learning_rate',
+                            'wd' : 'wd',
+                            'patience' : 'patience',
+                            'scheduler_factor' : 'scheduler_factor',
+                            'augmentation_prob' : 'augmentation_prob',
+                            'val_train_pond' : 'val_train_pond'
+                        }
+
+                        train_kwargs.update(build_kwargs(p, train_map))
+                        train_kwargs['parameters'] = current_params_model  # Pass full p dict for reference
+
+                        # --- Model Training Execution ---
+                        print(f"Training model with attention_selection: {p.get('attention_selection', 'default')}")
+
+                        results = training.train_and_evaluate(**train_kwargs)
+                        test_auc, test_acc, val_auc, val_acc, train_auc, train_acc, params = results
                         print(f"\nPoint {idx+1} finished training. AUC: {test_auc:.5f}\n")
 
                         # --- Save Results (using new helper) ---
@@ -348,6 +445,8 @@ def make_experiment_transformer(exp_config, p_base, all_iter={}, data_iter = {},
         #     print(f"Error encountered in all_iter {all_iter_counter}: {e}")
         #     # Continue to the next 'all_iter' loop if possible
         #     continue
+        df_results = pd.read_csv(csv_path)
+        return df_results
 
 
 

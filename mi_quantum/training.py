@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 import os
 import errno
 import shutil
+import re
 import pandas as pd
 import random
 from PIL import Image 
@@ -198,12 +199,25 @@ def label_smoothing_loss(predictions, targets, smoothing=0.1):
     return loss
 
 
+def dict_to_filename(data):
+    # 1. Convert dictionary to string
+    raw_str = str(data)
+    
+    # 2. Use Regex to keep only letters and numbers
+    # [^a-zA-Z0-9] means "anything that is NOT a letter or a digit"
+    clean_name = re.sub(r'[^a-zA-Z0-9]', '_', raw_str)
+    
+    # 3. Optional: Clean up double underscores and leading/trailing underscores
+    clean_name = re.sub(r'_+', '_', clean_name).strip('_')
+    
+    return clean_name
+
+
 
 def train_and_evaluate(
     model: torch.nn.Module, train_dataloader: torch.utils.data.DataLoader, valid_dataloader: torch.utils.data.DataLoader,
     test_dataloader: torch.utils.data.DataLoader, num_classes: int, num_epochs: int, device: torch.device, mapping: bool = False, 
-    learning_rate: float = 1e-4, res_folder: str = "results_cc", hidden_size: int = 12, patch_size: int = 4, num_heads: int = 1, 
-    dropout: float = 0.0225, num_transf: int = 1, mlp: int = 1, wd: float = 0.1, verbose: bool = False, patience : int = -1, scheduler_factor : float = 0.98, 
+    learning_rate: float = 1e-4, wd: float = 1e-7, res_folder: str = "results_cc", parameters : dict = {}, verbose: bool = False, patience : int = -1, scheduler_factor : float = 0.98, 
     autoencoder : bool = False, save_reconstructed_images : bool = False, augmentation_prob: float = 0.5, val_train_pond = 1) -> None:
     """Trains the given model on the given dataloaders for the given parameters"""
     start_event = torch.cuda.Event(enable_timing=True)
@@ -217,6 +231,7 @@ def train_and_evaluate(
     model.auclist = []
     model.acclist = []
     best_y_true, best_y_pred, best_y_pred_prob = [], [], []
+    save_string = dict_to_filename(parameters)
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=wd)
     # Definir el scheduler StepLR
@@ -420,7 +435,7 @@ def train_and_evaluate(
                     best_y_pred_prob = y_predVal
                     best_y_true = y_trueVal
                     state_dict = model.state_dict()  # get the original state_dict
-                    torch.save(state_dict, f'{res_folder}/model_weights_val_{learning_rate}_{hidden_size}_{dropout}_{num_heads}_{num_transf}_{mlp}_{patch_size}_{wd}.pth')
+                    torch.save(state_dict, f'{res_folder}/model_weights_val_' + save_string + '.pth')
 
                 else:
                     if patience > 0:
@@ -436,14 +451,14 @@ def train_and_evaluate(
                     best_tr_acc = tr_acc
                     best_epoch_tr = epoch + 1
                     state_dict = model.state_dict()  # get the original state_dict
-                    torch.save(state_dict, f'{res_folder}/model_weights_tr_{learning_rate}_{hidden_size}_{dropout}_{num_heads}_{num_transf}_{mlp}_{patch_size}_{wd}.pth')
+                    torch.save(state_dict, f'{res_folder}/model_weights_tr_' + save_string + '.pth')
 
             else:
                 if val_loss < best_val_mse:
                     best_val_mse = val_loss
                     best_epoch = epoch + 1
                     state_dict = model.state_dict()  # get the original state_dict
-                    torch.save(state_dict, f'{res_folder}/model_weights_val_{learning_rate}_{hidden_size}_{dropout}_{num_heads}_{num_transf}_{mlp}_{patch_size}_{wd}.pth')
+                    torch.save(state_dict, f'{res_folder}/model_weights_val_' + save_string + '.pth')
     
     # Save predictions to CSV
     if not autoencoder:
@@ -462,7 +477,7 @@ def train_and_evaluate(
             'vallosslist': model.vallosslist
         })
 
-    df.to_csv(f'{res_folder}/Training_{learning_rate}_{hidden_size}_{dropout}_{num_heads}_{num_transf}_{mlp}_{patch_size}_{wd}.csv', index=False)
+    df.to_csv(f'{res_folder}/Training_' + save_string + '.csv', index=False)
 
     print(f"TOTAL TIME = {time.time()-start_time:.2f}s")
     if not autoencoder:
@@ -477,7 +492,7 @@ def train_and_evaluate(
     torch.cuda.synchronize()
     elapsed_time_ms = start_event.elapsed_time(end_event)
 
-    model.load_state_dict(torch.load(f'{res_folder}/model_weights_val_{learning_rate}_{hidden_size}_{dropout}_{num_heads}_{num_transf}_{mlp}_{patch_size}_{wd}.pth', weights_only=True))
+    model.load_state_dict(torch.load(f'{res_folder}/model_weights_val_' + save_string + '.pth', weights_only=True))
 
     # Evaluación en el conjunto de prueba
     model.eval()
@@ -552,10 +567,8 @@ def train_and_evaluate(
 
         print(f"TEST MSE: {mse:.4f}")
 
-    df.to_csv(f'{res_folder}/predictions_test_{learning_rate}_{hidden_size}_{dropout}_{num_heads}_{num_transf}_{mlp}_{patch_size}_{wd}.csv', index=False)
+    df.to_csv(f'{res_folder}/predictions_test_' + save_string + '.csv', index=False)
     
-        
-
     ## Saving attention maps   
     if mapping:
         # Create directories for misclassified images

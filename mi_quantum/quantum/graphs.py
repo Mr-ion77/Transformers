@@ -36,12 +36,12 @@ def graph_builder(graph, num_qubits):
 
     if graph in ['chain', 'star']:
         for i in range(num_qubits):
-            graph_edges.append( [ i, i + 1 ] )
+            graph_edges.append( [ i, (i + 1) % num_qubits ] )
             if graph == 'star':
                 graph_edges.append( [ i , (i + 2) % num_qubits ])
 
     else:
-        graph_edges = special_graphs['graph']
+        graph_edges = special_graphs[num_qubits][graph]
 
     graph_weights = np.zeros( len(graph_edges) )
     graph_edges = np.stack( graph_edges )
@@ -50,5 +50,10 @@ def graph_builder(graph, num_qubits):
         mask = graph_edges[:, -1] == i
         recp = np.sum(mask)
         if recp > 0:
-            graph_weights[mask] = np.pi/recp
+            graph_weights[mask] = np.pi/( recp*3 )
+
+    return {
+        'edges'     :   graph_edges,
+        'weights'   :   graph_weights
+    }
 
