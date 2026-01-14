@@ -217,7 +217,7 @@ def dict_to_filename(data):
 def train_and_evaluate(
     model: torch.nn.Module, train_dataloader: torch.utils.data.DataLoader, valid_dataloader: torch.utils.data.DataLoader,
     test_dataloader: torch.utils.data.DataLoader, num_classes: int, num_epochs: int, device: torch.device, mapping: bool = False, 
-    learning_rate: float = 1e-4, wd: float = 1e-7, res_folder: str = "results_cc", parameters : dict = {}, verbose: bool = False, patience : int = -1, scheduler_factor : float = 0.98, 
+    learning_rate: float = 1e-4, wd: float = 1e-7, res_folder: str = "results_cc", parameters : dict = {}, verbose: int = 0, patience : int = -1, scheduler_factor : float = 0.98, 
     autoencoder : bool = False, save_reconstructed_images : bool = False, augmentation_prob: float = 0.5, val_train_pond = 1) -> None:
     """Trains the given model on the given dataloaders for the given parameters"""
     start_event = torch.cuda.Event(enable_timing=True)
@@ -266,7 +266,7 @@ def train_and_evaluate(
     for epoch in range(num_epochs):
         step = 0
 
-        with tqdm(total=len(train_dataloader), desc=f"Epoch {epoch+1:3}/{num_epochs}", unit="batch", bar_format='{l_bar}{bar:5}{r_bar}{bar:-10b}') as progress_bar:
+        with tqdm(total=len(train_dataloader), desc=f"Epoch {epoch+1:3}/{num_epochs}", unit="batch", bar_format='{l_bar}{bar:5}{r_bar}{bar:-10b}', disable = (verbose == 0)) as progress_bar:
             model.train()
             train_loss = 0.0
             y_trueTr, y_predTr = [], []
@@ -293,7 +293,7 @@ def train_and_evaluate(
 
                 optimizer.zero_grad()
 
-                if verbose:
+                if verbose == -1:
                     print(f" Zero grad ({time.time()-operation_start_time:.2f}s)")
                     operation_start_time = time.time()
 
@@ -318,7 +318,7 @@ def train_and_evaluate(
                 if num_classes == 2 and outputs.shape[1] == 2:
                     outputs = outputs[:, 1]
 
-                if verbose:
+                if verbose == -1:
                     print(f" Forward ({time.time()-operation_start_time:.2f}s)")
                     operation_start_time = time.time()
                 if not autoencoder:
@@ -326,19 +326,19 @@ def train_and_evaluate(
                 else:
                     loss = criterion(outputs, inputs)
 
-                if verbose:
+                if verbose == -1:
                     print(f" Loss ({time.time()-operation_start_time:.2f}s)")
                     operation_start_time = time.time()
 
                 loss.backward()
 
-                if verbose:
+                if verbose == -1:
                     print(f" Backward ({time.time()-operation_start_time:.2f}s)")
                     operation_start_time = time.time()
 
                 optimizer.step()
 
-                if verbose:
+                if verbose == -1:
                     print(f" Optimizer step ({time.time()-operation_start_time:.2f}s)")
 
                 step += 1

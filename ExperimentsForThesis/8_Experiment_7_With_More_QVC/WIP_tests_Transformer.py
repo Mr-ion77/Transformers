@@ -24,19 +24,20 @@ if __name__ == "__main__":
     
     # 1. Define Base Configs
     exp_config_base = {
-        'experiment_id': 'transformer_results/ExperimentsForThesis/28x28/parallel',
-        'experiment_name': 'Parallel',
+        'experiment_id': 'transformer_results/ExperimentsForThesis/28x28/quantum_training_crx_training_higher_mlp_more_qvc',
+        'experiment_name': '8_Experiment_7_With_More_QVC',
         'B': 256,
-        'N': 125, # Num epochs
-        'num_experiments': 30,
+        'N': 100, # Num epochs
+        'num_experiments': 50,
         'num_classes': 7,
-        'square' : True,
+        'square' : False,
         'pixels' : 28,
         'q_config' : {'none'},
         'channels_last': False,
         'device': 'cuda:0' if torch.cuda.is_available() else 'cpu',
-        'second_at_a_time' : False,
-        'send_telegram': True
+        'second_at_a_time' : True,
+        'send_telegram': True,
+        'verbose': True
     }
 
     p_base = {
@@ -46,10 +47,11 @@ if __name__ == "__main__":
         'num_transf': 2,
         'selection_amount': 49,
         'special_cls': 'false',
-        'mlp_size': 3,
+        'mlp_size': 5,
         'quantum': False,
-        'U3_layers' : False,
-        'dropout': 0.175,
+        'U3_layers' : 0,
+        'entangling_layers' : 0,
+        'dropout': 0.225,
         'parallel': 1,
         'attention_selection': 'none',
         'RD': 1,
@@ -67,8 +69,8 @@ if __name__ == "__main__":
         'channels_out' : [1],
         'ancilla': 0,
         'graphs' : 'star',
-        'entangle_method' : 'CNOT',
-        'invert_embedding' : False
+        'entangle_method' : 'CRX',
+        'invert_embedding' : True
     }
 
     # 2. Define Iterables
@@ -81,26 +83,21 @@ if __name__ == "__main__":
     }
 
     model_iter = {
-
+        'quantum' : [False, True], 'U3_layers' : [0, 2], 'entangling_layers' : [0, 2]
     }
 
-    pairs = { 1 : 0.175, 2 : 0.225, 3 : 0.3, 4 : 0.375}
-    graph_columns = ['parallel', 'test_auc']
+    graph_columns = ['quantum', 'U3_layers', 'entangling_layers', 'test_auc']
 
-    dfs = []
     # 3. Run Experiment
     print("--- Starting Refactored Transformer Experiment ---")
-    for parallel, dropout in pairs.items():
-        dfs.append( make_experiment_transformer(
-            exp_config_base, 
-            p_base, 
-            all_iter=all_iter, 
-            data_iter= data_iter,
-            model_iter= {'parallel' : [parallel], 'dropout' : [dropout]},
-            graph_columns=graph_columns
-        ) )
-
-    df_results = pd.concat(dfs) 
+    df_results = make_experiment_transformer(
+        exp_config_base, 
+        p_base, 
+        all_iter=all_iter, 
+        data_iter= data_iter,
+        model_iter=model_iter,
+        graph_columns=graph_columns
+    )
 
     print("--- Refactored Experiment Finished ---")
 
@@ -115,4 +112,3 @@ if __name__ == "__main__":
     # Use the reusable aggregation/top-n function
     agg, top_n = aggregate_and_save_top_configs(df = df_results, group_cols = group_cols, value_column = value_column, table_dir = table_dir, n=5)
         
-    

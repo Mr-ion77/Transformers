@@ -258,8 +258,8 @@ def preprocess_and_save(
     model1 = None,      # The model with .get_patches_by_attention
     p1 = None,          # Dictionary with patch parameters (e.g., p['p1'])
     num_channels = None, 
+    channels_last = False,
     flatten_extra_channels = False,
-    p = None, 
     device = 'cpu',
     flatten = True,
     concatenate_original = False
@@ -309,13 +309,6 @@ def preprocess_and_save(
     # --- 2. Setup Save Directory & Hyperparameters ---
     save_path_quantum = Path(save_path)
     save_path_quantum.mkdir(parents=True, exist_ok=True)
-
-    try:
-        if p: # Only save if 'p' is provided
-            with open(save_path_quantum / 'hyperparameters.json', 'w') as hf:
-                json.dump(p, hf, indent=2) 
-    except Exception as e:
-        print(f"Warning: failed to save hyperparameters.json: {e}")
 
     # --- 3. Single Pass Data Processing ---
     for i, dl in enumerate(DataLoaders):
@@ -483,7 +476,7 @@ def preprocess_and_save(
         Quantums = create_dataloaders(
             data_dir = None,
             batch_size = B,
-            channels_last = p.get('channels_last', False) if p else False,
+            channels_last = channels_last,
             tensors = current_kernels_tensors,
             transforms = {'train': None, 'val': None, 'test': None},
             shuffle = False

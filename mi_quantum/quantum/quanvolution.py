@@ -56,7 +56,7 @@ class QuantumKernel(nn.Module):
     
 
 class QuantumConv2D(nn.Module):
-    def __init__(self, kernel_size=3, stride=1, padding=0, channels_out = [4], channels_last = False, graph= 'chain', entangle_method ='CNOT', ancilla = 1, pad_filler = 'median', invert_embedding = True):
+    def __init__(self, kernel_size=3, stride=1, padding=0, channels_out = [4], channels_last = False, graphs= 'chain', entangle_method ='CNOT', ancilla = 1, pad_filler = 'median', invert_embedding = True):
         super().__init__()
 
         if ancilla and channels_out != [-1]:
@@ -65,7 +65,7 @@ class QuantumConv2D(nn.Module):
         self.invert_embedding = invert_embedding
         self.channels_out = channels_out 
         self.kernel = QuantumKernel(
-            circuit = QuantumLayer(num_qubits = kernel_size**2 + ancilla, graph = graph, entangle_method=entangle_method, invert = self.invert_embedding),
+            circuit = QuantumLayer(num_qubits = kernel_size**2 + ancilla, graphs = graphs, entangle_method=entangle_method, invert = self.invert_embedding),
             channels_out = channels_out, ancilla = ancilla
         )
 
@@ -138,7 +138,7 @@ class QuantumConv2D(nn.Module):
         
     
 class QuantumConv1D(nn.Module):
-    def __init__(self, window_size=3, stride=1, padding=0, channels_out = [4], graph= 'chain', entangle_method = 'CNOT', ancilla = 1, pad_filler = 'median'):
+    def __init__(self, window_size=3, stride=1, padding=0, channels_out = [4], graphs= 'chain', entangle_method = 'CNOT', ancilla = 1, pad_filler = 'median'):
         super().__init__()
 
         if ancilla and channels_out != [-1]:
@@ -148,7 +148,7 @@ class QuantumConv1D(nn.Module):
         self.entangle_method = entangle_method
         self.pad_filler = pad_filler
         self.kernel = QuantumKernel(
-            circuit = QuantumLayer(num_qubits = window_size + ancilla, graph = graph, entangle_method=entangle_method),
+            circuit = QuantumLayer(num_qubits = window_size + ancilla, graphs = graphs, entangle_method=entangle_method),
             channels_out = channels_out, ancilla = ancilla
         )
 

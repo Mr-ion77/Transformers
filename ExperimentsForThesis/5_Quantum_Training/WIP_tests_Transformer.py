@@ -24,7 +24,7 @@ if __name__ == "__main__":
     
     # 1. Define Base Configs
     exp_config_base = {
-        'experiment_id': 'ExperimentsForThesis/28x28/quantum_training',
+        'experiment_id': 'transformer_results/ExperimentsForThesis/28x28/quantum_training',
         'experiment_name': 'Refactored Transformer Experiment',
         'B': 256,
         'N': 125, # Num epochs
@@ -49,7 +49,7 @@ if __name__ == "__main__":
         'special_cls': 'false',
         'mlp_size': 3,
         'quantum': False,
-        'train_q' : False,
+        'U3_layers' : False,
         'dropout': 0.175,
         'parallel': 1,
         'attention_selection': 'none',
@@ -67,7 +67,7 @@ if __name__ == "__main__":
         'stride' : 1,
         'channels_out' : [1],
         'ancilla': 0,
-        'graph' : 'star',
+        'graphs' : 'star',
         'entangle_method' : 'CRX',
         'invert_embedding' : True
     }
@@ -82,10 +82,10 @@ if __name__ == "__main__":
     }
 
     model_iter = {
-        'quantum' : [True, False], 'train_q' : [False, True]
+        'quantum' : [True, False], 'U3_layers' : [False, True]
     }
 
-    graph_columns = ['quantum', 'train_q', 'test_auc']
+    graph_columns = ['quantum', 'U3_layers', 'test_auc']
 
     # 3. Run Experiment
     print("--- Starting Refactored Transformer Experiment ---")

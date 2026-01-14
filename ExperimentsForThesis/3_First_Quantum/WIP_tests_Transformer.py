@@ -48,7 +48,7 @@ if __name__ == "__main__":
         'special_cls': 'false',
         'mlp_size': 3,
         'quantum': False,
-        'train_q' : False,
+        'U3_layers' : False,
         'dropout': 0.175,
         'parallel': 1,
         'attention_selection': 'none',
@@ -66,7 +66,7 @@ if __name__ == "__main__":
         'stride' : 1,
         'channels_out' : [1],
         'ancilla': 0,
-        'graph' : 'star',
+        'graphs' : 'star',
         'entangle_method' : 'CNOT',
         'invert_embedding' : False
     }

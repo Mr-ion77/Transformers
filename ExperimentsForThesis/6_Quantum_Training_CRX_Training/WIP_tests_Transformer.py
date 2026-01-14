@@ -24,7 +24,7 @@ if __name__ == "__main__":
     
     # 1. Define Base Configs
     exp_config_base = {
-        'experiment_id': 'ExperimentsForThesis/28x28/quantum_training_crx_training',
+        'experiment_id': 'transformer_results/ExperimentsForThesis/28x28/quantum_training_crx_training',
         'experiment_name': 'Quantum Training CRX Training Experiment',
         'B': 256,
         'N': 100, # Num epochs
@@ -48,8 +48,8 @@ if __name__ == "__main__":
         'special_cls': 'false',
         'mlp_size': 3,
         'quantum': False,
-        'train_q' : False,
-        'train_r' : False,
+        'U3_layers' : False,
+        'entangling_layers' : False,
         'dropout': 0.175,
         'parallel': 1,
         'attention_selection': 'none',
@@ -67,7 +67,7 @@ if __name__ == "__main__":
         'stride' : 1,
         'channels_out' : [1],
         'ancilla': 0,
-        'graph' : 'star',
+        'graphs' : 'star',
         'entangle_method' : 'CRX',
         'invert_embedding' : True
     }
@@ -82,10 +82,10 @@ if __name__ == "__main__":
     }
 
     model_iter = {
-        'quantum' : [False, True], 'train_q' : [False, True], 'train_r' : [True, False]
+        'quantum' : [False, True], 'U3_layers' : [False, True], 'entangling_layers' : [True, False]
     }
 
-    graph_columns = ['quantum', 'train_q', 'train_r', 'test_auc']
+    graph_columns = ['quantum', 'U3_layers', 'entangling_layers', 'test_auc']
 
     # 3. Run Experiment
     print("--- Starting Refactored Transformer Experiment ---")
