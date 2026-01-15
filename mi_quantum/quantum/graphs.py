@@ -4,7 +4,7 @@ def graph_builder(graph, num_qubits):
     """
     Builder function for predefined graphs.
     
-    :param graph: Type of graph to build: 'chain' (entangle sequentially) or 'star' ( entangle sequentially + 2-neighbours ).
+    :param graph: Type of graph to build: 'chain' (entangle sequentially), 'chain_reverse' (reversed chain),  'neighbours' (chain + chain_reversed), 'star' ( entangle sequentially + 2-order-neighbours ).
     :param num_quibts: Number of qubits in the graph
     """
 
@@ -34,14 +34,19 @@ def graph_builder(graph, num_qubits):
     
     graph_edges = []
 
-    if graph in ['chain', 'star']:
-        for i in range(num_qubits):
-            graph_edges.append( [ i, i + 1 ] )
+    
+    for i in range(num_qubits):
+        if graph in ['chain', 'star', 'neighbours']:
+            graph_edges.append( [ i, (i + 1) % num_qubits ] )
             if graph == 'star':
                 graph_edges.append( [ i , (i + 2) % num_qubits ])
+            if graph == 'neighbours':
+                graph_edges.append( [ i , (i - 1) % num_qubits ])
+        if graph == 'chain_reverse':
+            graph_edges.append( [ (i + 1) % num_qubits , i ] )
 
     else:
-        graph_edges = special_graphs['graph']
+        graph_edges = special_graphs[num_qubits][graph]
 
     graph_weights = np.zeros( len(graph_edges) )
     graph_edges = np.stack( graph_edges )
@@ -50,5 +55,10 @@ def graph_builder(graph, num_qubits):
         mask = graph_edges[:, -1] == i
         recp = np.sum(mask)
         if recp > 0:
-            graph_weights[mask] = np.pi/recp
+            graph_weights[mask] = np.pi/( recp*3 )
+
+    return {
+        'edges'     :   graph_edges,
+        'weights'   :   graph_weights
+    }
 

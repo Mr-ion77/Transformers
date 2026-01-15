@@ -5,7 +5,7 @@ if __name__ == "__main__":
     
     # 1. Define Base Configs
     exp_config_base = {
-        'experiment_id': 'wd_after_edges_drop_and_lr',
+        'experiment_id': 'wd_after_edges_drop_and_lr_add_none',
         'experiment_name': 'Edges search: Dropout and Learning Rate with Weight Decay',
         'B': 256,
         'N': 125, # Num epochs
@@ -13,7 +13,7 @@ if __name__ == "__main__":
         'num_classes': 7,
         'square' : True,
         'pixels' : 64,
-        'q_config' : {'quantum'},
+        'q_config' : {'quantum', 'none'},
         'channels_last': False,
         'device': 'cuda:0' if torch.cuda.is_available() else 'cpu',
         'second_at_a_time' : False,
@@ -27,16 +27,16 @@ if __name__ == "__main__":
         'num_transf': 2,
         'selection_amount': 32,
         'special_cls': 'false',
-        'mlp_size': 4,
+        'mlp_size': 5,
         'quantum': False,
         'dropout': 0.225,
         'parallel': 2,
         'attention_selection': 'filter',
         'RD': 1,
         'q_stride': 1,
-        'connectivity': 'star',
+        'connectivity': {'edges': [[0, 1], [1, 2], [2, 3], [3, 0], [0, 2], [1, 3]], 'weights': [torch.pi/3] * 6},
         'learning_rate': 0.0025,
-        'hidden_size': 48,          # Example, might be derived
+        'hidden_size': 192,          # Example, might be derived
         'weight_decay': 1e-7,
         'patience': -1,
         'scheduler_factor': 0.965,
@@ -63,10 +63,10 @@ if __name__ == "__main__":
     }
 
     model_iter = {
-       'dropout': [0.225], 'learning_rate': [  7.5e-4  ], 'weight_decay': [ 1e-7, 1e-6, 1e-5, 1e-4, 1e-3, 1e-2 ]
+       'dropout': [0.225], 'learning_rate': [  7.5e-4  ], 'weight_decay': [ 1e-2, 1e-1, 5e-1 ]
     }
 
-    graph_columns = ['invert_embedding', 'entangle_method', 'weight_decay', 'test_auc']
+    graph_columns = ['entangle_method', 'entangle_method', 'weight_decay', 'test_auc']
 
     # 3. Run Experiment
     print("--- Starting Refactored Transformer Experiment ---")
