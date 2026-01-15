@@ -24,7 +24,7 @@ if __name__ == "__main__":
     
     # 1. Define Base Configs
     exp_config_base = {
-        'experiment_id': 'ExperimentsForThesis/28x28/first_quantum',
+        'experiment_id': 'transformer_results/ExperimentsForThesis/28x28/first_quantum',
         'experiment_name': 'First Quantum (CNOTs)',
         'B': 256,
         'N': 125, # Num epochs
@@ -69,6 +69,7 @@ if __name__ == "__main__":
         'graphs' : 'star',
         'entangle_method' : 'CNOT',
         'invert_embedding' : False
+        jajaja
     }
 
     # 2. Define Iterables

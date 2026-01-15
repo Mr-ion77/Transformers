@@ -29,21 +29,22 @@ def graph_builder(graph, num_qubits):
 
     special_bool = graph in special_graphs.get(num_qubits, {})
 
-    assert special_bool or graph in ['chain', 'star'], \
-        f"Graph must be one fo the following: {list(special_graphs.keys()) + ['chain', 'star']}, but got {graph}."
+    assert special_bool or graph in ['chain', 'star', 'chain_reverse', 'neighbours'], \
+        f"Graph must be one fo the following: {list(special_graphs.keys()) + ['chain', 'star','chain_reverse','neighbours']}, but got {graph}."
     
     graph_edges = []
 
+    if not special_bool:
     
-    for i in range(num_qubits):
-        if graph in ['chain', 'star', 'neighbours']:
-            graph_edges.append( [ i, (i + 1) % num_qubits ] )
-            if graph == 'star':
-                graph_edges.append( [ i , (i + 2) % num_qubits ])
-            if graph == 'neighbours':
-                graph_edges.append( [ i , (i - 1) % num_qubits ])
-        if graph == 'chain_reverse':
-            graph_edges.append( [ (i + 1) % num_qubits , i ] )
+        for i in range(num_qubits):
+            if graph in ['chain', 'star', 'neighbours']:
+                graph_edges.append( [ i, (i + 1) % num_qubits ] )
+                if graph == 'star':
+                    graph_edges.append( [ i , (i + 2) % num_qubits ])
+                if graph == 'neighbours':
+                    graph_edges.append( [ i , (i - 1) % num_qubits ])
+            if graph == 'chain_reverse':
+                graph_edges.append( [ (i + 1) % num_qubits , i ] )
 
     else:
         graph_edges = special_graphs[num_qubits][graph]

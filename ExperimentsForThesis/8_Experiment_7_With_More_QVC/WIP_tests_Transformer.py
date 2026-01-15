@@ -56,7 +56,7 @@ if __name__ == "__main__":
         'attention_selection': 'none',
         'RD': 1,
         'q_stride': 1,
-        'connectivity': {'edges': [[0, 1], [1, 2], [2, 0]], 'weights': [torch.pi/3] * 3},
+        'connectivity': ['chain', 'chain_reverse'],
         'learning_rate': 0.0025,
         'hidden_size': 48,          # Example, might be derived
         'weight_decay': 1e-7,
