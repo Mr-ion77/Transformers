@@ -614,6 +614,10 @@ def train_and_evaluate(
                 if misclassified:
                     save_attention(pred, images, dir_misclassified_test,patch_size)  # Use attention for misclassified
 
+    if hasattr( model , "_volution"):
+        weights_dict = model._volution.state_dict()
+        print(f"\n\n_Volution weights after training: {weights_dict}\n\n")
+
     if not autoencoder:
         return test_auc, test_acc, best_val_auc, best_val_acc, best_tr_auc, best_tr_acc, number_of_parameters
     else:

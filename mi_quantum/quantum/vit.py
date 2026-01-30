@@ -1,6 +1,7 @@
 import torch
 from torch import nn
 from mi_quantum.quantum.pennylane_backend import QuantumLayer
+from mi_quantum.quantum.quanvolution import QuantumConv2D, Convolution2D
 import torch.nn.functional as F
 
 # See:
@@ -237,7 +238,7 @@ class MultiheadSelfAttention(nn.Module):
 
 class FeedForward(nn.Module):
     def __init__(self, hidden_size, mlp_hidden_size, hidden_size_out , quantum = True, U3_layers = False, entangling_layers = False, invert = True, entangle_method = 'CNOT',
-                 dropout={'embedding_attn': 0.225, 'after_attn': 0.225, 'feedforward': 0.225, 'embedding_pos': 0.225}, q_stride = 4, graphs = 'chain'):
+                 train_q = True, dropout={'embedding_attn': 0.225, 'after_attn': 0.225, 'feedforward': 0.225, 'embedding_pos': 0.225}, q_stride = 4, graphs = 'chain'):
         super().__init__()
 
         self.quantum = quantum
@@ -245,13 +246,14 @@ class FeedForward(nn.Module):
         print(f"Started a FeedForward Module with Quantum-setting: {quantum} and training: U3:{U3_layers}, entangling:{entangling_layers}")
         self.q_stride = q_stride
         self.mlp_hidden_size = mlp_hidden_size
+        self.train_q = train_q
 
         self.fc1 = nn.Linear(hidden_size, q_stride * mlp_hidden_size)
         self.fc2 = nn.Linear(q_stride * mlp_hidden_size, hidden_size_out)
         self.normalize = nn.LayerNorm(mlp_hidden_size)
 
         if self.quantum:
-            self.vqc = QuantumLayer(mlp_hidden_size, graphs = graphs, invert = invert, U3_layers = U3_layers, entangling_layers = entangling_layers, entangle_method= self.entangle_method)
+            self.vqc = QuantumLayer(mlp_hidden_size, graphs = graphs, invert = invert, train_q = train_q, U3_layers = U3_layers, entangling_layers = entangling_layers, entangle_method= self.entangle_method)
         else:
             self.vqc = nn.Linear(mlp_hidden_size, mlp_hidden_size)
 
@@ -303,7 +305,8 @@ class FeedForward(nn.Module):
         return x
 
 class TransformerBlock_Attention_Chosen_QMLP(nn.Module):
-    def __init__(self, hidden_size, num_heads, mlp_hidden_size, hidden_size_out, Attention_N = 2, quantum_mlp = True, U3_layers = False, entangling_layers = False, invert = True, dropout={'embedding_attn': 0.225, 'after_attn': 0.225, 'feedforward': 0.225, 'embedding_pos': 0.225}, 
+    def __init__(self, hidden_size, num_heads, mlp_hidden_size, hidden_size_out, Attention_N = 2, quantum_mlp = True, U3_layers = False, entangling_layers = False, 
+                 train_q = True, invert = True, dropout={'embedding_attn': 0.225, 'after_attn': 0.225, 'feedforward': 0.225, 'embedding_pos': 0.225}, 
                     attention_selection="filter", q_lr = 49, special_cls = False , q_stride = 4, connectivity = 'chain', entangle_method = 'CNOT', RD = 1, img_size = 28, patch_size = 4):
         super().__init__()
 
@@ -313,6 +316,7 @@ class TransformerBlock_Attention_Chosen_QMLP(nn.Module):
         self.entangling_layers = entangling_layers
         self.entangle_method = entangle_method
         self.invert = invert
+        self.train_q = train_q
         self.dropout = dropout
         self.Attention_N = Attention_N
         self.special_cls = special_cls
@@ -332,7 +336,7 @@ class TransformerBlock_Attention_Chosen_QMLP(nn.Module):
         self.mlp_norm = nn.LayerNorm(hidden_size)
 
         self.mlp_sel = FeedForward(hidden_size, mlp_hidden_size, hidden_size_out, quantum = self.quantum_mlp, U3_layers = self.U3_layers, entangling_layers = self.entangling_layers,
-                                    invert = self.invert, entangle_method = self.entangle_method, dropout = self.dropout, q_stride = self.q_stride,
+                                    invert = self.invert, train_q = self.train_q, entangle_method = self.entangle_method, dropout = self.dropout, q_stride = self.q_stride,
                                     graphs = connectivity)  # Quantum MLP
 
         if attention_selection not in ["filter", "none"] or RD > 1:
@@ -409,10 +413,11 @@ class TransformerBlock_Attention_Chosen_QMLP(nn.Module):
 
 class VisionTransformer(nn.Module):
     def __init__(self, img_size, num_channels, num_classes, patch_size, hidden_size, num_heads, num_transformer_blocks, mlp_hidden_size, Attention_N = 2,
-                    quantum_mlp = False, U3_layers = False, entangling_layers = False, entangle_method = 'CNOT', invert_embedding = True, quantum_classification = False, 
+                    quantum_mlp = False, preprocessor = 'none', quantum_classification = False, U3_layers = False, entangling_layers = False, 
+                    entangle_method = 'CNOT', invert_embedding = True, q_stride = 1, connectivity = 'chain', train_q = False,
                     dropout= {'embedding_attn': 0.225, 'after_attn': 0.225, 'feedforward': 0.225, 'embedding_pos': 0.225}, 
                     channels_last=False, RD = 1, attention_selection = 'filter', selection_amount = None, special_cls = 'none',
-                    parallel = 1, parallel_mode = 'copy', q_stride = 1, connectivity = 'chain', patch_embedding_required = 'true'
+                    parallel = 1, parallel_mode = 'copy', patch_embedding_required = 'true'
                     ):
         super().__init__()
 
@@ -455,6 +460,8 @@ class VisionTransformer(nn.Module):
         self.invert = invert_embedding
         self.entangle_method = entangle_method
         self.quantum_classification = quantum_classification
+        self.preprocessor = preprocessor
+        self.train_q = train_q
         self.special_cls = special_cls
         self.q_stride = q_stride
         self.connectivity = connectivity
@@ -483,19 +490,31 @@ class VisionTransformer(nn.Module):
                                                                                         Attention_N = self.Attention_N, quantum_mlp = self.quantum_mlp, invert = self.invert, entangle_method = self.entangle_method,
                                                                                         U3_layers = self.U3_layers, entangling_layers = self.entangling_layers, dropout = self.dropout_values, RD = self.RD, q_lr = self.q_lr,
                                                                                         attention_selection = self.attention_selection, special_cls = self.special_cls,
-                                                                                        q_stride = self.q_stride, connectivity = self.connectivity)
+                                                                                        q_stride = self.q_stride, connectivity = self.connectivity, train_q = self.train_q)
                                             for i in range(num_transformer_blocks)]) for j in range(parallel) ] )
 
         self.layer_norm = nn.LayerNorm(hidden_size // (RD**(num_transformer_blocks)))  # Normalization after the last transformer block
-
+        print(f"QUANTUM CLASSIFICATION?: {self.quantum_classification}")
         self.linear = nn.Linear( (hidden_size // (RD**(num_transformer_blocks)) ) * parallel, num_classes)
-        self.linear2 = nn.Linear(num_classes,num_classes) if not self.quantum_classification else QuantumLayer(num_qubits=num_classes, graphs=self.connectivity)
+        self.linear2 = nn.Linear(num_classes,num_classes) if not self.quantum_classification else  QuantumLayer(num_qubits=num_classes, graphs = self.connectivity, invert = self.invert, train_q = self.train_q, U3_layers = self.U3_layers, entangling_layers = self.entangling_layers, entangle_method= self.entangle_method)
 
+        if self.preprocessor == 'quantum':
+            self._volution = QuantumConv2D(kernel_size = 2, stride = 1, channels_out = [1], graphs = 'chain', entangle_method ='CRX', ancilla = 0, 
+                                           train_q = self.train_q, padding = {'Up': 1, 'Down': 0, 'Left': 1, 'Right': 0}, U3_layers = self.U3_layers, entangling_layers = self.entangling_layers)
+        elif self.preprocessor == 'classical':
+            self._volution = Convolution2D(kernel_size = 2, stride = 1, channels_out = [1], padding = {'Up': 1, 'Down': 0, 'Left': 1, 'Right': 0})
+        elif self.preprocessor == 'none':
+            self._volution = nn.Identity()
+        else:
+            raise ValueError(f"preprocessor argument should be one of: 'quantum', 'classical', 'none', but got {self.quantum_preprocessor} instead")
     def patch_embed_sample(self, x):
         if self.channels_last:
             x = x.permute(0, 3, 1, 2)
         # x.shape = (batch_size, num_channels, img_size, img_size)
         assert x.shape[2] * x.shape[3] % (self.patch_embedding.kernel_size ** 2) == 0, "Image dimensions must be divisible by the patch size."
+        
+        x = self._volution(x) # Preprocess before patch_embedding
+
         x = self.patch_embedding(x)
         # x.shape = (batch_size, hidden_size, sqrt(num_patches), sqrt(num_patches))
         x = x.flatten(start_dim=2)

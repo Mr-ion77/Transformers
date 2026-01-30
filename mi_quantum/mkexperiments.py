@@ -44,7 +44,7 @@ DEFAULT_COLUMNS = [
 ]
 
 default_redundancies = [
-    {'quantum': False, 'U3_layers': [False, True], 'entangling_layers': [False, True], 'invert_embedding': [False, True]},
+    {'quantum': False, 'U3_layers' : [0, 1, 2], 'entangling_layers' : [0, 1, 2], 'invert_embedding': [False, True]},
 ]
 
 model_map = {
@@ -64,7 +64,10 @@ model_map = {
             'special_cls': 'special_cls',
             'parallel': 'parallel',
             'q_stride': 'q_stride',
-            'connectivity': 'connectivity'
+            'connectivity': 'connectivity',
+            'quantum_classification' : 'quantum_classification',
+            'train_q' : 'train_q',
+            'preprocessor' : 'preprocessor'
 }
 
 train_map = {
@@ -144,7 +147,7 @@ def make_directories_for_experiment(variant = 'selformer', exp_config = None, p1
     if exp_config is None:
         raise ValueError("exp_config cannot be None")
         
-    base_dir = f"../QTransformer_Results_and_Datasets"
+    base_dir = f"../QTransformer_Results_and_Datasets" 
     exp_dir = os.path.join(base_dir, exp_config['experiment_id'])
     
     os.makedirs(os.path.join(base_dir, 'current_results' if not exp_config['second_at_a_time'] else 'current_results2'), exist_ok=True)

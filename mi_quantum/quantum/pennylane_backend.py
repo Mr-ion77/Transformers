@@ -12,14 +12,24 @@ class QuantumLayer(torch.nn.Module):
         entangle_method='CNOT',
         invert=True, 
         U3_layers = 0,
-        entangling_layers = 0
+        entangling_layers = 0, 
+        train_q = True
     ):
         super().__init__()
+
         self.num_qubits = num_qubits
         self.entangle_method = entangle_method
         self.U3_layers = int(U3_layers)
         self.entangling_layers = int(entangling_layers)
         self.invert = invert
+        self.train_q = train_q
+
+        print(f"Initialized quantum layer with settings: U3 layers: {self.U3_layers}, entangling layers: {self.entangling_layers}, train : {train_q}")
+        if train_q == False and (self.U3_layers > 0):
+            print(f"U3_layers effect when train_q == False is null, setting U3_layers to 0 for efficiency.")
+            self.U3_layers = 0
+            print(f"Revised settings: U3 layers: {self.U3_layers}, entangling layers: {self.entangling_layers}, train : {train_q}")
+
         
         # --- 1. Multi-Graph Processing with Cycling ---
         if not isinstance(graphs, list):
@@ -67,17 +77,11 @@ class QuantumLayer(torch.nn.Module):
 
         @qml.qnode(dev, interface="torch", diff_method="backprop")
         def circuit_(inputs, weights):
+
             inputs = np.pi * (1 - self.invert + (2 * self.invert - 1) * torch.clamp(inputs, min=0, max=1))
+            qml.AngleEmbedding(inputs, wires=range(self.num_qubits), rotation='Y')
             
-            if self.entangle_method == 'edges':
-                qml.RY(3 * (inputs[..., 0] - inputs[..., 1] + inputs[..., 2] - inputs[..., 3]), wires=0)
-                qml.RY(3 * (inputs[..., 0] - inputs[..., 2] + inputs[..., 1] - inputs[..., 3]), wires=2)
-                qml.RY(inputs[..., 1], wires=1)
-                qml.RY(inputs[..., 3], wires=3)
-                qml.CRY((np.pi - inputs[..., 3]), wires=[0, 3])
-                qml.CRY((np.pi - inputs[..., 3]), wires=[2, 3])
-            else:
-                qml.AngleEmbedding(inputs, wires=range(self.num_qubits), rotation='Y')
+            if self.entangle_method != 'SEL':
 
                 w_idx = 0
                 max_layers = max(self.U3_layers, self.entangling_layers)
@@ -95,18 +99,15 @@ class QuantumLayer(torch.nn.Module):
                         current_fixed_weights = self.layers_weights[L]
 
                         for i, (u, v) in enumerate(current_edges):
-                            if self.entangle_method in ['CRX', 'CRY']:
-                                w = weights[w_idx]
-                                w_idx += 1
-                            else:
-                                w = current_fixed_weights[i] if i < len(current_fixed_weights) else (np.pi / 3)
+                            w = weights[w_idx]
+                            w_idx += 1
 
                             if self.entangle_method == 'CNOT':
                                 qml.CNOT(wires=[u, v])
                             elif self.entangle_method == 'CRX':
-                                qml.CRX(w, wires=[u, v])
+                                qml.CRX(w + current_fixed_weights[i], wires=[u, v])
                             elif self.entangle_method == 'CRY':
-                                qml.CRY(w, wires=[u, v])
+                                qml.CRY(w + current_fixed_weights[i], wires=[u, v])
 
                 if self.entangle_method == 'SEL':
                     qml.StronglyEntanglingLayers(weights.reshape(1, self.num_qubits, 3), wires=range(self.num_qubits))
@@ -116,12 +117,16 @@ class QuantumLayer(torch.nn.Module):
         # --- 4. Setup ---
         self.magic = qml.qnn.TorchLayer(circuit_, {"weights": weight_shape})
         
-        if total_weights == 0:
+        if total_weights == 0 or (train_q == False):
+
+            with torch.no_grad():
+                # self.magic.weights is the parameter name assigned by TorchLayer
+                self.magic.weights.fill_(0)
+
             for param in self.magic.parameters():
                 param.requires_grad = False
         
-        print(f"Quantum Layer Info: U3 Layers={self.U3_layers} | Entangling Layers={self.entangling_layers}")
-        print(f"Graphs utilized: {len(self.layers_edges)} | Total Params: {total_weights}")
+        print(f"Graphs utilized: {len(self.layers_edges)} | Total Params: {total_weights} | Training : {train_q}")
 
     def forward(self, inputs):
         if inputs.ndim == 3:

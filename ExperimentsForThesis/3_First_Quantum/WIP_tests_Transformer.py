@@ -69,7 +69,6 @@ if __name__ == "__main__":
         'graphs' : 'star',
         'entangle_method' : 'CNOT',
         'invert_embedding' : False
-        jajaja
     }
 
     # 2. Define Iterables
