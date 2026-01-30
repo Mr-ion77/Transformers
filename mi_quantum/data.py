@@ -266,13 +266,24 @@ def preprocess_and_save(
 ):
     """
     Preprocess datasets using one or more Quanvolution modules efficiently.
-    ... [rest of docstring] ...
 
     Args:
-        ... [original args] ...
+        B (int): batch_size,
+        DataLoaders = DataLoaders containing information to process with the kernels
         kernels (dict): Dictionary mapping names (str) to Quanvolution modules.
                       Example: {'patchwise': Quanvolution(...)}
-        ...
+        save_path (str): Directory where results are saved
+        mode (str): 'standard' for usual convolution over whole image, 
+                    'patchwise' if you want to apply convolution to each patch
+                    individually. In the latter case you must provide a model (model1)
+                    with a function 'get_patches_by_attention' that returns a tensor with the selected patches.
+        model1 (nn.Module) : above mentioned model
+        p1 (dict) : parameters of model1 required to reshape outputs into the correct format, not needed if mode = 'standard'
+        num_channels: Number of channels in the images
+        flatten_extra_channels (bool) : in mode 'patchwise', flatten information of extra_channels created during quantum processing or not
+        flatten (bool): in mode 'patchwise' flatten all information regarding one patch
+        device (str or torch.device): device to extract the computing power from
+        concatenate_original (bool): concatenate original image at the beginning of the tensor or not after the quantum processing
     """
 
     # --- 1. Initialization ---
@@ -350,7 +361,7 @@ def preprocess_and_save(
                         C, P = num_channels, p1['1_patch_size']
 
                         # 1. Get patches from model1
-                        aux_patches, selected_indices = model1.get_patches_by_attention(x=images, parallel_branch=0) #Until here everything okay
+                        aux_patches, *selected_indices = model1.get_patches_by_attention(x=images, parallel_branch=0) #Until here everything okay
 
                         # aux_patches = model1.get_selected_pixel_patches(images, selected_indices, quantum_channels = 0, originals = concatenate_original)
                         # selected_patches shape: (B_img, 1_selection_amount, C, patch_size, patch_size)
