@@ -1,5 +1,6 @@
 # Model weights
 *.pth
+*.pt
 # Ignore experiment/result folders
 breast_results/
 DERMA/
@@ -8,3 +9,4 @@ Exp_Yolanda/
 venv/
 __pycache__/
 mi_quantum/__pycache__/
+
