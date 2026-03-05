@@ -36,6 +36,24 @@ class CosineEncoding(torch.nn.Module):
             out = torch.cos(out * torch.pi/2)
         return out
 
+class SlicedDataLoader:
+    """Wraps a DataLoader to slice the channel dimension dynamically."""
+    def __init__(self, dataloader, slice_indices):
+        self.dataloader = dataloader
+        self.slice_indices = slice_indices
+
+    def __iter__(self):
+        for batch in self.dataloader:
+            if isinstance(batch, (tuple, list)):
+                # batch[0] is images, batch[1:] contains labels, indices, etc.
+                sliced_images = batch[0][:, self.slice_indices, ...]
+                # Yield the sliced images followed by everything else exactly as it was
+                yield (sliced_images, *batch[1:])
+            else:
+                yield batch[:, self.slice_indices, ...]
+
+    def __len__(self):
+        return len(self.dataloader)
 
 
 # --- Global Constants ---
@@ -45,6 +63,7 @@ DEFAULT_COLUMNS = [
 
 default_redundancies = [
     {'quantum': False, 'U3_layers' : [0, 1, 2], 'entangling_layers' : [0, 1, 2], 'invert_embedding': [False, True]},
+    {'q_config' : 'none', 'channels_out' : [ [0], [1], [2], [3]]}
 ]
 
 model_map = {
@@ -150,7 +169,7 @@ def make_directories_for_experiment(variant = 'selformer', exp_config = None, p1
     base_dir = f"../QTransformer_Results_and_Datasets" 
     exp_dir = os.path.join(base_dir, exp_config['experiment_id'])
     
-    os.makedirs(os.path.join(base_dir, 'current_results' if not exp_config['second_at_a_time'] else 'current_results2'), exist_ok=True)
+    os.makedirs(os.path.join(base_dir, variant + ('_results/current_results' if not exp_config['second_at_a_time'] else '_results/current_results2')), exist_ok=True)
     try:
         os.makedirs(exp_dir, exist_ok=False)
     except FileExistsError as e:
@@ -341,145 +360,210 @@ def make_experiment_transformer(exp_config, p_base, all_iter={}, data_iter = {},
         # Send initial progress
         send_telegram_report(current_exp_config, progress=0)   
 
-        # --- Experiment Repetition Loop ---
-        for idx in range(current_exp_config['num_experiments']):
-            progress = int( 100 * (idx + 1) // current_exp_config['num_experiments'] )
-            # Send progress update (helper handles filtering)
-            send_telegram_report(current_exp_config, progress=progress)
-            report_progress(experiment_name, idx + 1, exp_config['num_experiments'])
+        # --- Extract channels_out to prevent redundant preprocessing ---
+        has_channels_out = 'channels_out' in data_iter
+        if has_channels_out:
+            master_channels_out = sorted(list(set(c for sublist in data_iter['channels_out'] for c in sublist)))
+            data_iter_base = {k: v for k, v in data_iter.items() if k != 'channels_out'}
+            channels_out_list = data_iter['channels_out']
+        else:
+            master_channels_out = p.get('channels_out', [-1])
+            data_iter_base = data_iter
+            channels_out_list = [master_channels_out]
+
+        # --- Calculate total iterations for global progress ---
+        num_data_base = len(list(itertools.product(*data_iter_base.values()))) if data_iter_base else 1
+        num_models = len(list(itertools.product(*model_iter.values()))) if model_iter else 1
+        
+        total_iterations = (
+            num_data_base * len(channels_out_list) * num_models * len(exp_config['q_config']) * current_exp_config['num_experiments']
+        )
+        current_iteration = 0
+        data_iteration = 0
+        
+        print(f"\nTotal planned iterations across all grid search parameters: {total_iterations}")
+
+        # ==========================================================
+        # 1. OUTERMOST LOOP: DATA GENERATION
+        # ==========================================================
+
+        for pack_data_base in itertools.product(*data_iter_base.values()) if data_iter_base else [()]:
+            model_iteration = 0
+            current_params_base = dict(zip(data_iter_base.keys(), pack_data_base))
             
-            print(f"\n===== Experiment Run {idx + 1} / {current_exp_config['num_experiments']} =====")
+            # Setup master parameters for preprocessing
+            p_master = p.copy()
+            custom_update_dict(p_master, current_params_base)
+            p_master['channels_out'] = master_channels_out
 
-            for pack_data in itertools.product(*data_iter.values()):
+            paddings = { 2 : { 'Up': 1, 'Down': 0, 'Left': 1, 'Right': 0 }, 3 : { 'Up': 1, 'Down': 1, 'Left': 1, 'Right': 1 } }
 
-                if pack_data or not processed_once:
+            Kernels = { 
+                'none': torch.nn.Identity(),
+                'quantum': quantum.quanvolution.QuantumConv2D(
+                    kernel_size = p_master['quanv_kernel_size'],
+                    stride = p_master['stride'],
+                    padding = paddings[p_master['quanv_kernel_size']],
+                    channels_out = p_master['channels_out'], 
+                    ancilla = p_master['ancilla'],
+                    graphs = p_master['connectivity'],
+                    entangle_method = p_master['entangle_method'], 
+                    invert_embedding = p_master['invert_embedding']
+                ),
+                'cosine': CosineEncoding(),
+                'cosine2': CosineEncoding(),
+            }
 
-                    current_params_data = dict(zip(data_iter.keys(), pack_data))
-                    if current_params_data.get('channels_out', [None]) == [1] and current_params_data.get('entangle_method', [None]) == 'edges' or current_params_data.get('channels_out', [None]) == [3] and current_params_data.get('entangle_method', [None]) == 'CRX':
-                        continue
+            Kernels = { k : v for k, v in Kernels.items() if ( (k == 'none') and NoneBool ) or ( (k == 'quantum') and QuantumBool ) or ( (k == 'cosine') and CosBool ) or ( (k == 'cosine2') and ('cosine2' in current_exp_config['q_config']) )}
+            print(f"\n[DATA GENERATION] Kernels to be used: {list(Kernels.keys())} for params {pack_data_base}")
+            
+            # PROCESS ONCE per data configuration
+            Latents_master = preprocess_and_save(
+                B = exp_config['B'],
+                DataLoaders = [notrans_train_dl, val_dl, test_dl],
+                kernels = Kernels,
+                save_path = f"../QTransformer_Results_and_Datasets/transformer_results/quantum_datasets",
+                mode = 'standard',
+                model1 = None,
+                p1 = p_master,
+                num_channels = num_channels,
+                device = exp_config['device'],
+                concatenate_original = exp_config.get('concatenate_original', False)
+            )
 
-                    custom_update_dict(p, current_params_data)
+            # ==========================================================
+            # 2. CHANNELS_OUT Slicer Loop
+            # ==========================================================
+            channels_out_iteration = 0
+            have_trained_none = False
+            for current_channels_out in channels_out_list:
+                
+                current_params_data = current_params_base.copy()
+                if has_channels_out:
+                    current_params_data['channels_out'] = current_channels_out
 
-                    DataLoaders = [notrans_train_dl, val_dl, test_dl]
-                    paddings = { 2 : { 'Up': 1, 'Down': 0, 'Left': 1, 'Right': 0 }, 3 : { 'Up': 1, 'Down': 1, 'Left': 1, 'Right': 1 } }
+                if current_params_data.get('channels_out', [None]) == [1] and current_params_data.get('entangle_method', [None]) == 'edges' or current_params_data.get('channels_out', [None]) == [3] and current_params_data.get('entangle_method', [None]) == 'CRX':
+                    continue
 
-                    Kernels = { 'none'      :   torch.nn.Identity(),
-                                'quantum'   :   quantum.quanvolution.QuantumConv2D(
-                                                    kernel_size = p['quanv_kernel_size'],
-                                                    stride = p['stride'],
-                                                    padding = paddings[p['quanv_kernel_size']],
-                                                    channels_out = p['channels_out'],
-                                                    ancilla= p['ancilla'],
-                                                    graphs = p['connectivity'],
-                                                    entangle_method = p['entangle_method'], 
-                                                    invert_embedding = p['invert_embedding']
-                                                ),
-                                'cosine'    :   CosineEncoding(),
-                                'cosine2'   :   CosineEncoding(),
-                                
-                                }
+                custom_update_dict(p, current_params_data)
 
-                    Kernels = { k : v for k, v in Kernels.items() if ( (k == 'none') and NoneBool ) or ( (k == 'quantum') and QuantumBool ) or ( (k == 'cosine') and CosBool ) or ( (k == 'cosine2') and ('cosine2' in current_exp_config['q_config']) )}
-                    print("Kernels to be used:", list(Kernels.keys()) )
-                    
-                    Latents = preprocess_and_save(
-                        B = exp_config['B'],
-                        DataLoaders = DataLoaders,
-                        kernels = Kernels,
-                        save_path = f"../QTransformer_Results_and_Datasets/transformer_results/quantum_datasets",
-                        mode = 'standard',
-                        model1 = None,
-                        p1 = p,
-                        num_channels = num_channels,
-                        device = exp_config['device'],
-                        concatenate_original = exp_config.get('concatenate_original', False)
-                    )
-                    processed_once = True
+                # Slicing logic
+                Latents = {}
+                if current_channels_out == master_channels_out:
+                    Latents = Latents_master
+                else:
+                    slice_indices = []
+                    for q in current_channels_out:
+                        master_idx = master_channels_out.index(q)
+                        slice_indices.extend(range(master_idx * num_channels, (master_idx + 1) * num_channels))
 
-                # --- Innermost Loop (model_iter) ---
+                    for q_config_key, (tr_dl, val_dl, te_dl, shape2) in Latents_master.items():
+                        if q_config_key in ['quantum', 'cosine', 'cosine2']:
+                            Latents[q_config_key] = (
+                                SlicedDataLoader(tr_dl, slice_indices),
+                                SlicedDataLoader(val_dl, slice_indices),
+                                SlicedDataLoader(te_dl, slice_indices),
+                                (len(slice_indices), shape2[1], shape2[2])
+                            )
+                        else:
+                            Latents[q_config_key] = (tr_dl, val_dl, te_dl, shape2)
+
+                # ==========================================================
+                # 3. MODEL PARAMS LOOP
+                # ==========================================================
                 for pack_model in itertools.product(*model_iter.values()):
 
+                    # ==========================================================
+                    # 4. Q_CONFIG LOOP
+                    # ==========================================================
                     for q_config in exp_config['q_config']:
+
+                        if q_config == 'none' and have_trained_none:
+                            print("Skipping redundant 'none' configuration")
+                            continue
 
                         latent_train_dl, latent_val_dl, latent_test_dl, shape2 = Latents[q_config]
 
-                        # Apply updates from model_iter
                         current_params_model = dict(zip(model_iter.keys(), pack_model))
                         if exp_config.get('square', True):
                             custom_update_dict( current_params_model, {'num_transf' : current_params_model.get('parallel',p['parallel']) } )
-
-                        custom_update_dict(p, current_params_model)
-
-                        print(f"\nCurrent params for model:", current_params_model)
-
-                        oneortwo = 'current_results' if not current_exp_config['second_at_a_time'] else 'current_results2'
-                        aux_save_path = Path(f"../QTransformer_Results_and_Datasets/transformer_results/" + oneortwo + f"/grid_search{idx}")
-                        aux_save_path.mkdir(parents=True, exist_ok=True)
                         
-                        hidden_size = len( p['channels_out'] ) * shape[0] * p['patch_size']**2
-                        # --- Model Definition ---
-                        # 1. Prepare base arguments from p (only those that exist)
+                        custom_update_dict(p, current_params_model)
 
                         if is_redundant(p, model_iter, redundancies):
                             print("Skipping redundant parameter combination")
                             continue
 
-                        # 1. Define Model Arguments
-                        # Fixed arguments (required or from current_exp_config)
-                        model_kwargs = {
-                            'img_size': shape[-1],
-                            'num_channels': shape[0],
-                            'num_classes': current_exp_config['num_classes'],
-                            'hidden_size': hidden_size,
-                            'channels_last': current_exp_config['channels_last'],
-                            'quantum_classification': False,
-                        }
+                        # ==========================================================
+                        # 5. INNERMOST LOOP: EXPERIMENT REPETITIONS
+                        # ==========================================================
+                        for idx in range(current_exp_config['num_experiments']):
+                            
+                            # Note: You might want to adjust how progress is reported now 
+                            # that it tracks Grid Search combos * runs, rather than just runs.
+                            progress = int( 100 * (data_iteration * current_exp_config['num_experiments']*model_iteration + idx) // total_iterations )
+                            send_telegram_report(current_exp_config, progress=progress)
+                            report_progress(experiment_name, idx + 1, exp_config['num_experiments'])
+                            
+                            print(f"\n===== Exp Run {idx + 1}/{current_exp_config['num_experiments']} | Q-Config: {q_config} =====")
+                            print(f"Current model params: {current_params_model}")
 
-                        # Dynamic arguments from p (maps 'p' key name -> VisionTransformer __init__ name)
-                        model_kwargs.update(build_kwargs(p, model_map))
+                            oneortwo = 'current_results' if not current_exp_config['second_at_a_time'] else 'current_results2'
+                            aux_save_path = Path(f"../QTransformer_Results_and_Datasets/transformer_results/" + oneortwo + f"/grid_search{idx}")
+                            aux_save_path.mkdir(parents=True, exist_ok=True)
+                            
+                            hidden_size = len( p['channels_out'] ) * shape[0] * p['patch_size']**2
+                            
+                            model_kwargs = {
+                                'img_size': shape[-1],
+                                'num_channels': shape[0],
+                                'num_classes': current_exp_config['num_classes'],
+                                'hidden_size': hidden_size,
+                                'channels_last': current_exp_config['channels_last'],
+                                'quantum_classification': False,
+                            }
+                            model_kwargs.update(build_kwargs(p, model_map))
 
-                        # Handle dropout separately since it uses a transformation function
-                        if 'dropout' in p:
-                            model_kwargs['dropout'] = make_dropout(p['dropout'])
+                            if 'dropout' in p:
+                                model_kwargs['dropout'] = make_dropout(p['dropout'])
 
-                        # Initialize Model
-                        model = quantum.vit.VisionTransformer(**model_kwargs)
-                        print("Model initialized with parameters:", model_kwargs)
-                        # 2. Define Training Arguments
-                        train_kwargs = {
-                            'model': model,
-                            'train_dataloader': latent_train_dl,
-                            'valid_dataloader': latent_val_dl,
-                            'test_dataloader': latent_test_dl,
-                            'num_classes': current_exp_config['num_classes'],
-                            'num_epochs': current_exp_config['N'],
-                            'device': current_exp_config['device'],
-                            'res_folder': str(aux_save_path),
-                            'mapping': False,
-                            'autoencoder': False,
-                            'verbose': current_exp_config.get('verbose', False) 
-                        }
+                            # FRESH MODEL INITIALIZATION PER RUN
+                            model = quantum.vit.VisionTransformer(**model_kwargs)
+                            
+                            train_kwargs = {
+                                'model': model,
+                                'train_dataloader': latent_train_dl,
+                                'valid_dataloader': latent_val_dl,
+                                'test_dataloader': latent_test_dl,
+                                'num_classes': current_exp_config['num_classes'],
+                                'num_epochs': current_exp_config['N'],
+                                'device': current_exp_config['device'],
+                                'res_folder': str(aux_save_path),
+                                'verbose': current_exp_config.get('verbose', False) ,
+                                'mode' : 'transformer',
+                                'optimizer' : current_exp_config.get('optimizer', 'Adam')
+                            }
+                            train_kwargs.update(build_kwargs(p, train_map))
+                            train_kwargs['parameters'] = current_params_model  
 
-                        train_kwargs.update(build_kwargs(p, train_map))
-                        train_kwargs['parameters'] = current_params_model  # Pass full p dict for reference
+                            results = training.train_and_evaluate(**train_kwargs)
+                            test_auc, test_acc, val_auc, val_acc, train_auc, train_acc, params = results
 
-                        # --- Model Training Execution ---
-                        print(f"Training model with attention_selection: {p.get('attention_selection', 'default')}")
+                            # Log Results
+                            row = {
+                                'idx': idx + 1, 'q_config': q_config, 'all_iter_idx': all_iter_counter,
+                                'test_auc': test_auc, 'test_acc': test_acc, 'val_auc': val_auc, 
+                                'val_acc': val_acc, 'train_auc': train_auc, 'train_acc': train_acc,
+                                '#params': params,
+                                **p 
+                            }
+                            log_experiment_row(csv_path, row, columns)
 
-                        results = training.train_and_evaluate(**train_kwargs)
-                        test_auc, test_acc, val_auc, val_acc, train_auc, train_acc, params = results
-                        print(f"\nPoint {idx+1} finished training. AUC: {test_auc:.5f}\n")
+                    model_iteration += 1
+                channels_out_iteration += 1
+                have_trained_none = True if q_config == 'none' else have_trained_none
+            data_iteration += 1
 
-                        # --- Save Results (using new helper) ---
-                        row = {
-                            'idx': idx + 1, 'q_config': q_config, 'all_iter_idx': all_iter_counter,
-                            'test_auc': test_auc, 'test_acc': test_acc, 'val_auc': val_auc, 
-                            'val_acc': val_acc, 'train_auc': train_auc, 'train_acc': train_acc,
-                            '#params': params,
-                            **p # Add all current hyperparameters
-                        }
-                        print("Logging results:", row)
-                        log_experiment_row(csv_path, row, columns)
 
         # --- Send final report (using new helper) ---
         send_telegram_report(
@@ -605,8 +689,8 @@ def make_experiment_selformer(exp_config, p1_base, data_base, p2_base, all_iter=
                     train1_kwargs = {
                         'model': model1, 'train_dataloader': train_dl, 'valid_dataloader': val_dl, 'test_dataloader': test_dl,
                         'num_classes': current_exp_config['num_classes'], 'num_epochs': current_exp_config['N1'],
-                        'device': current_exp_config['device'], 'res_folder': str(selector_save_path),
-                        'mapping': False, 'autoencoder': False, 'parameters': current_params_sel, 'verbose': current_exp_config.get('verbose', False) 
+                        'device': current_exp_config['device'], 'res_folder': str(selector_save_path), 
+                        'parameters': current_params_sel, 'verbose': current_exp_config.get('verbose', False), 'mode': 'transformer'
                     }
                     train1_kwargs.update(build_prefixed_kwargs(p1, train_map))
                     
@@ -683,7 +767,7 @@ def make_experiment_selformer(exp_config, p1_base, data_base, p2_base, all_iter=
                                     model2_kwargs = {
                                         'img_size': shape2[-1], 'num_channels': shape[0], 'num_classes': current_exp_config['num_classes'],
                                         'hidden_size': hidden_size2, 'channels_last': current_exp_config['channels_last'], 'quantum_classification': False,
-                                        'patch_embedding_required' : 'false'
+                                        'patch_embedding_required' : 'flatten' if current_exp_config['augmenting'] else 'none'
                                     }
                                     model2_kwargs.update(build_kwargs(p2, model_map))
                                     model2 = quantum.vit.VisionTransformer(**model2_kwargs)
@@ -692,8 +776,8 @@ def make_experiment_selformer(exp_config, p1_base, data_base, p2_base, all_iter=
                                     train2_kwargs = {
                                         'model': model2, 'train_dataloader': latent_train, 'valid_dataloader': latent_val, 'test_dataloader': latent_test,
                                         'num_classes': current_exp_config['num_classes'], 'num_epochs': current_exp_config['N2'],
-                                        'device': current_exp_config['device'], 'res_folder': str(classifier_save_path),
-                                        'mapping': False, 'autoencoder': False, 'parameters': current_params_class, 'verbose': current_exp_config.get('verbose', False) 
+                                        'device': current_exp_config['device'], 'res_folder': str(classifier_save_path), 'mode': 'selected',
+                                        'parameters': current_params_class, 'verbose': current_exp_config.get('verbose', False) 
                                     }
                                     train2_kwargs.update(build_kwargs(p2, train_map))
 
@@ -711,6 +795,263 @@ def make_experiment_selformer(exp_config, p1_base, data_base, p2_base, all_iter=
                                         **p1, **p2
                                     }
                                     log_experiment_row(csv_path, row, columns)
+
+        # Final Report
+        send_telegram_report(
+            current_exp_config, csv_path=csv_path, columns=graph_columns,
+            title=f"{current_exp_config['experiment_name']} (all_iter {all_iter_counter})"
+        )
+
+    return pd.read_csv(csv_path)
+
+
+class AutoencoderLatentWrapper(torch.nn.Module):
+    """Wraps the AutoEnformer to output latents with (Batch, ...) shape."""
+    def __init__(self, autoencoder):
+        super().__init__()
+        self.autoencoder = autoencoder
+
+    def forward(self, x):
+        # x shape is (Batch, C, H, W)
+        B = x.shape[0] 
+        latents = self.autoencoder.get_latent_representation(x)
+
+        # Ensure it has a channel dim for 2D processing if needed
+        # Case A: (Batch, Hidden) -> (Batch, 1, Hidden)
+        if len(latents.shape) == 2:
+            return latents.unsqueeze(1)
+            
+        # Case B: (Batch, Parallel/Seq, Hidden) -> Keep as is (Channels = Parallel)
+        return latents
+
+def make_experiment_autoenformer(exp_config, p1_base, p2_base, data_kernels={}, all_iter={}, m1_iter={}, data_iter={}, m2_iter={}, redundancies=default_redundancies, graph_columns=['q_config', 'test_auc'], repeat_autoencoder = False):
+    """
+    Automated pipeline for AutoEnformer:
+    1. Train AutoEnformer (Autoencoder).
+    2. Extract Latents + Apply Quantum/Processing Kernels (passed via data_kernels).
+    3. Train Classifier on processed latents.
+    """
+
+    root_id = exp_config['experiment_id']
+    all_iter_counter = 0
+
+    # Define columns for CSV logging
+    columns = (['idx', 'all_iter_idx', 'q_config', 'latent_shape'] + 
+               list(all_iter.keys()) + list(m1_iter.keys()) + list(data_iter.keys()) + 
+               list(m2_iter.keys()) + DEFAULT_COLUMNS + ['#params_ae', '#params_class', 'test_mse', 'val_mse'])
+    try:
+        columns.remove('test_auc_sel')
+        columns.remove('test_acc_sel')
+        columns.remove('test_acc_sel')
+    except:
+        pass
+
+    # --- Use the 'all_iter' generator style ---
+    for pack_all in itertools.product(*all_iter.values()):
+        all_iter_counter += 1
+        current_params_all = dict(zip(all_iter.keys(), pack_all))
+        autoencoded_once = False
+        # Create fresh copies
+        p1 = p1_base.copy() # Autoencoder params
+        p2 = p2_base.copy() # Classifier params
+        current_exp_config = exp_config.copy()
+
+        custom_update_dict(p1, current_params_all)
+        custom_update_dict(p2, current_params_all)
+        custom_update_dict(current_exp_config, current_params_all)
+
+        experiment_id = f"{root_id}/all_iter_{all_iter_counter}/"
+        current_exp_config.update({'experiment_id': experiment_id, 'trained_autoencoder_once': False})
+
+        progress = 0
+        csv_path, save_path = make_directories_for_experiment(
+            variant='autoenformer',
+            exp_config=current_exp_config,
+            p1=p1, p2=p2,
+            all_iter=all_iter, m1_iter=m1_iter, data_iter=data_iter, m2_iter=m2_iter,
+            columns=columns
+        )
+
+        # --- Load data ---
+        # Note: Autoencoder usually needs raw images, so we use notrans_train_dl or train_dl depending on requirements
+        notrans_train_dl, train_dl, val_dl, test_dl, shape = data.get_medmnist_dataloaders(
+            pixel=current_exp_config['pixels'],
+            data_flag='dermamnist',
+            extra_tr_without_trans=True,
+            batch_size=current_exp_config['B'],
+            num_workers=4, pin_memory=True
+        )
+
+        num_channels = shape[-1] if current_exp_config['channels_last'] else shape[0]
+        send_telegram_report(current_exp_config, progress=0)
+
+        # --- Experiment Repetition Loop ---
+        for idx_ in range(current_exp_config['num_experiments']):
+            idx = idx_ + 1
+            progress = int(100 * idx // current_exp_config['num_experiments'])
+            send_telegram_report(current_exp_config, progress=progress)
+            report_progress(current_exp_config['experiment_name'], idx, current_exp_config['num_experiments'])
+
+            print(f"\n===== Experiment Run {idx} / {current_exp_config['num_experiments']} =====")
+
+            oneortwo = 'current_results' if not current_exp_config['second_at_a_time'] else 'current_results2'
+            run_save_path = Path(f"../QTransformer_Results_and_Datasets/autoenformer_results/{oneortwo}/grid_search{idx}")
+            ae_save_path = run_save_path / 'autoencoder'
+            classifier_save_path = run_save_path / 'classifier'
+            ae_save_path.mkdir(parents=True, exist_ok=True)
+            classifier_save_path.mkdir(parents=True, exist_ok=True)
+
+            # --- Step 1: Autoencoder Loop (m1_iter) ---
+            for pack_ae in itertools.product(*m1_iter.values()):
+                current_params_ae = dict(zip(m1_iter.keys(), pack_ae))
+                custom_update_dict(p1, current_params_ae)
+
+                if (not current_exp_config['trained_autoencoder_once']) or current_exp_config.get('repeat_autoencoder', False):
+                    current_exp_config['trained_autoencoder_once'] = True
+
+                    # Initialize AutoEnformer
+                    model1_kwargs = {
+                        'img_size': shape[-1], # Assuming square
+                        'num_channels': num_channels,
+                        'patch_size': p1['patch_size'],
+                        'hidden_size': p1['hidden_size'],
+                        'num_heads': p1['num_head'],
+                        'num_transformer_blocks': p1['num_transf'],
+                        'attention_selection': p1['attention_selection'],
+                        'mlp_hidden_size': p1['mlp_size'],
+                        'Attention_N': p1['Attention_N'],
+                        'dropout': p1.get('dropout', 0.0),
+                        'parallel': p1['parallel'],
+                        'channels_last': False, 
+                        'q_stride': p1.get('q_stride', 1),
+                        'special_cls' : p1.get('special_cls', False)
+                    }
+                    
+                    model1 = quantum.vit.AutoEnformer(**model1_kwargs)
+
+                    # Train Autoencoder
+                    train1_kwargs = {
+                        'model': model1,
+                        'train_dataloader': train_dl,
+                        'valid_dataloader': val_dl,
+                        'test_dataloader': test_dl,
+                        'num_classes': current_exp_config['num_classes'], 
+                        'learning_rate': p1['learning_rate'],
+                        'num_epochs': current_exp_config['N1'],
+                        'device': current_exp_config['device'],
+                        'res_folder': str(ae_save_path),
+                        'wd': p1['weight_decay'],
+                        'patience': p1['patience'],
+                        'scheduler_factor': p1['scheduler_factor'],
+                        'mode': 'autoencoder',
+                        'save_reconstructed_images': (idx == 1),
+                        'verbose': current_exp_config.get('verbose', True)
+                    }
+                    
+                    test_mse, val_mse, params_ae = training.train_and_evaluate(**train1_kwargs)
+                    print(f"Autoencoder Trained. MSE: {test_mse:.5f}")
+
+                    # Wrap model for Latent Extraction
+                    model1.eval()
+                    # Ensure AutoencoderLatentWrapper is defined in your scope
+                    latent_extractor = AutoencoderLatentWrapper(model1).to(current_exp_config['device'])
+
+                processed_data_once = False
+                
+                # --- Step 2: Data Preprocessing (Latent -> Quantum -> Save) (data_iter) ---
+                for pack_data in itertools.product(*data_iter.values()):
+                    if pack_data or not processed_data_once:
+                        processed_data_once = True
+                        current_params_data = dict(zip(data_iter.keys(), pack_data))
+                        custom_update_dict(p2, current_params_data) 
+
+                        # Construct chained Kernels: Latent Extractor -> Data Kernel
+                        ActiveKernels = {}
+                        
+                        # Filter keys based on current configuration and wrap them
+                        for k, v in data_kernels.items():
+                            if k in current_exp_config['q_config']:
+                                # Ensure the kernel module is on the correct device
+                                v = v.to(current_exp_config['device'])
+                                ActiveKernels[k] = torch.nn.Sequential(latent_extractor, v)
+
+                        # Generate Datasets
+                        Latents = preprocess_and_save(
+                            B=current_exp_config['B'],
+                            DataLoaders=[ notrans_train_dl, val_dl,test_dl], 
+                            kernels=ActiveKernels,
+                            save_path=f"../QTransformer_Results_and_Datasets/autoenformer_results/quantum_datasets",
+                            mode='standard', 
+                            model1=None, 
+                            p1=None,
+                            num_channels=num_channels, 
+                            device=current_exp_config['device'],
+                            concatenate_original=False 
+                        )
+
+                    # --- Step 3: Classifier Loop (m2_iter) ---
+                    for config_key in ActiveKernels.keys():
+                        latent_train, latent_val, latent_test, shape2 = Latents[config_key]
+
+                        print(f"DEBUG FOR SHAPES: supossed shape (shape2): {shape2}, actual shape: {next(iter(latent_train))[0].shape}")
+                        
+                        for pack_class in itertools.product(*m2_iter.values()):
+                            current_params_class = dict(zip(m2_iter.keys(), pack_class))
+
+                            if is_redundant(current_params_class, m2_iter, redundancies):
+                                continue
+
+                            custom_update_dict(p2, current_params_class)
+                            
+                            # Setup Classifier Model (DeViT)
+                            model2 = quantum.vit.DeViT(
+                                num_classes=current_exp_config['num_classes'],
+                                p=p2,
+                                shape=shape2, 
+                                dim_latent=shape2[-1] 
+                            )
+
+                            train2_kwargs = {
+                                'model': model2,
+                                'train_dataloader': latent_train,
+                                'valid_dataloader': latent_val,
+                                'test_dataloader': latent_test,
+                                'num_classes': current_exp_config['num_classes'],
+                                'learning_rate': p2['learning_rate'],
+                                'num_epochs': current_exp_config['N2'],
+                                'device': current_exp_config['device'],
+                                'res_folder': str(classifier_save_path),
+                                'wd': p2['weight_decay'],
+                                'patience': p2['patience'],
+                                'scheduler_factor': p2['scheduler_factor'],
+                                'mode': 'transformer',
+                                'verbose': current_exp_config.get('verbose', True),
+                                'augmentation_prob' : 0,
+                            }
+
+                            results = training.train_and_evaluate(**train2_kwargs)
+                            test_auc, test_acc, val_auc, val_acc, train_auc, train_acc, params_class = results
+
+                            # Log results
+                            row = {
+                                'idx': idx, 
+                                'all_iter_idx': all_iter_counter, 
+                                'q_config': config_key,
+                                'channels_out': len(current_params_data.get('channels_out', [])),
+                                'latent_shape': [*shape2],
+                                'test_mse': test_mse, 
+                                'val_mse': val_mse, 
+                                '#params_ae': params_ae,
+                                'test_auc': test_auc, 
+                                'test_acc': test_acc, 
+                                'val_auc': val_auc, 
+                                'val_acc': val_acc,
+                                'train_auc': train_auc, 
+                                'train_acc': train_acc, 
+                                '#params_class': params_class,
+                                **p1, **p2
+                            }
+                            log_experiment_row(csv_path, row, columns)
 
         # Final Report
         send_telegram_report(

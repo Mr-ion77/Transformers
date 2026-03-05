@@ -58,8 +58,10 @@ def graph_builder(graph, num_qubits):
         if recp > 0:
             graph_weights[mask] = np.pi/( recp*3 )
 
-    return {
+    final_graph = {
         'edges'     :   graph_edges,
         'weights'   :   graph_weights
     }
+    
+    return final_graph
 

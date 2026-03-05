@@ -49,7 +49,7 @@ if __name__ == "__main__":
         'special_cls': 'false',
         'mlp_size': 5,
         'quantum': False,
-        'train_q' : True,
+        'train_q' : False,
         'U3_layers' : 1,
         'entangling_layers' : 1,
         'dropout': 0.225,

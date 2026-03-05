@@ -3,6 +3,7 @@ from torch import nn
 from mi_quantum.quantum.pennylane_backend import QuantumLayer
 from mi_quantum.quantum.quanvolution import QuantumConv2D, Convolution2D
 import torch.nn.functional as F
+import math
 
 # See:
 # - https://nlp.seas.harvard.edu/annotated-transformer/
@@ -44,6 +45,29 @@ def rank_patches_by_attention(attn: torch.Tensor) -> torch.Tensor:
 
             return sorted_indices
 
+class TrainableGELU(nn.Module):
+	"""
+	Trainable GeLU (tanh approximation):
+	  gelu(x) ≈ 0.5 * x * (1 + tanh( sqrt(2/pi) * (x + 0.044715 x^3) ))
+	
+	We expose three learnable scalars:
+	  - w1: output scale (amplitude)
+	  - w2: input slope applied to x inside the tanh (steepness)
+	  - w3: bias added inside the tanh (shift)
+	Form used:
+	  f(x) = w1 * 0.5 * x * (1 + tanh( sqrt(2/pi) * (z + 0.044715 z^3) + w3 )),
+	  where z = w2 * x
+	"""
+	def __init__(self):
+		super().__init__()
+		self.w1 = nn.Parameter(torch.ones(1))   # output scale
+		self.w2 = nn.Parameter(torch.ones(1))   # input slope
+		self.w3 = nn.Parameter(torch.zeros(1))  # inner bias
+
+	def forward(self, x):
+		z = self.w2 * x
+		inner = z / math.sqrt(2.0)
+		return self.w1 * 0.5 * x * (1.0 + torch.erf(inner) + self.w3)
 
 class NMultiheadSelfAttention(nn.Module):
     def __init__(
@@ -146,96 +170,136 @@ class NMultiheadSelfAttention(nn.Module):
 class MultiheadSelfAttention(nn.Module):
     def __init__(self, embed_dim, num_heads, dropout={'embedding_attn': 0.225, 'after_attn': 0.225, 'feedforward': 0.225, 'embedding_pos': 0.225}, special_cls = 'none'):
         super().__init__()
-        assert embed_dim % num_heads == 0, f"Embedding dimension ({embed_dim}) should be divisible by number of heads ({num_heads})"
+        super().__init__()
+        assert embed_dim % num_heads == 0, f"embed_dim {embed_dim} must be divisible by num_heads {num_heads}"
 
         self.embed_dim = embed_dim
         self.num_heads = num_heads
         self.head_dim = embed_dim // num_heads
         self.special_cls = special_cls
+        
+        valid_modes = ['false', 'none', 'partial_projection', 'full_projection', 'replace_attention']
+        assert self.special_cls in valid_modes, f"Invalid special_cls: {self.special_cls}"
 
-        print('Started a MutliheadSelfAttention layer with embed_dim:', embed_dim, 'num_heads:', num_heads, 'head_dim:', self.head_dim)
-
-        if self.special_cls == 'full_projection':
-            self.cls_proj = nn.Linear(embed_dim, embed_dim)
-        if self.special_cls == 'part_projection':
-            self.cls_ponderator = nn.Parameter( torch.tensor([0.5]) )
-
+        # Projections
         self.q_proj = nn.Linear(embed_dim, embed_dim)
         self.k_proj = nn.Linear(embed_dim, embed_dim)
         self.v_proj = nn.Linear(embed_dim, embed_dim)
-        self.dropout = nn.Dropout(dropout['embedding_attn'])
         self.o_proj = nn.Linear(embed_dim, embed_dim)
+        
+        # Special CLS params
+        if self.special_cls == 'full_projection':
+            self.cls_proj = nn.Linear(embed_dim, embed_dim)
+        elif self.special_cls == 'partial_projection':
+            self.cls_ponderator = nn.Parameter(torch.tensor(0.5))
 
+        # Handle dropout input (dict or float)
+        drop_prob = dropout['embedding_attn'] if isinstance(dropout, dict) else dropout
+        self.dropout = nn.Dropout(drop_prob)
 
     def forward(self, x):
-        batch_size, seq_len, embed_dim = x.shape
-        # x.shape = (batch_size, seq_len, embed_dim)
-        assert embed_dim == self.embed_dim, f"Input embedding dimension ({embed_dim}) should match layer embedding dimension ({self.embed_dim})"
-
-        full_cls_bool = self.special_cls == 'full_projection'                           # For ramification purposes depending on special_cls config
-        part_cls_bool = ( self.special_cls == 'partial_projection' or full_cls_bool )   # For ramification purposes depending on special_cls config
-
-        if part_cls_bool:
-            cls_token = x[:,0,:]
-            x = x[:,1:,:]
-
-            if full_cls_bool:
-                cls_proj = self.cls_proj(x).reshape(batch_size, seq_len - part_cls_bool, self.num_heads, self.head_dim).transpose(1, 2)  # (B, H, S, D)
-            else:
-                cls_proj = cls_token.expand(-1, seq_len - part_cls_bool, -1).reshape(batch_size, seq_len - part_cls_bool, self.num_heads, self.head_dim).transpose(1, 2) # (B, H, S, D)
-                cls_proj = self.cls_ponderator*cls_proj + x*(1-self.cls_ponderator)  # Weighted combination
-
-        q, k, v, = [
-            proj(x).reshape(batch_size, seq_len - part_cls_bool, self.num_heads, self.head_dim).transpose(1, 2)                                                          # (B, H, S, D)  
-            for proj, x in zip([self.q_proj, self.k_proj, self.v_proj], [x, x, x, x])
-        ]
-
-        # q, k, v.shape = (batch_size, num_heads, seq_len, head_dim)
-        qk_dot = q @ k.transpose(-2, -1)
-        # promote for stability, compute norms and avoid NaNs
-        q_norm2 = (q.float()**2).sum(dim = -1, keepdim = True).clamp(min=1e-5)
-        # Compute scaled dot-product attention logits
-        attn_logits_standard = ( qk_dot / ( (self.head_dim * q_norm2 )** 0.5)) 
-        # Compute softmax and dropout to get weights
-        attn_standard = self.dropout( attn_logits_standard.softmax(dim=-1) )    # (B, H, S, S)
-        # Compute output
-        values = attn_standard @ v  # (B, H, S, D)
-
-        if part_cls_bool:
-            # Compute special attention logits involving the cls token: 
-            # compute the projection over the cls_token of the projection of key over query.
-            # First get query for cls_token
-            c = self.q_proj(cls_token).reshape(batch_size, 1, self.num_heads, self.head_dim).transpose(1, 2)                        # (B, H, 1, D)
-
-            # Compute dot products and norms
-            cq_dot = c @ q.transpose(-2, -1)                                                                                        # (B, H, 1, D) @ (B, H, D, S) -> (B, H, 1, S)
-            c_norm2 =  ((c.float()**2).sum(dim = -1, keepdim = True).clamp(min=1e-5))                                               # (B, H, 1, D) (keepdim = True)
-
-            # Compute scaled dot-product attention
-            attn_logits_cls_to_others = attn_logits_standard * cq_dot / (  (q_norm2 * c_norm2 )** 0.5  )                            # (B, H, S, S)
-            attn_cls_to_others = self.dropout( attn_logits_cls_to_others.softmax(dim=-1) )                                          # (B, H, S, S)
-
-            # Now compute attention from others to cls_token in a standard way
-            ck_dot = c @ k.transpose(-2, -1)                                                                                        # (B, H, 1, D) @ (B, H, D, S) -> (B, H, 1, S)
-            attn_logits_others_to_cls = ( ck_dot / ( (self.head_dim * c_norm2 )** 0.5))                                             # (B, H, 1, S)
-
-            # Compute softmax and dropout to get weights
-            attn_others_to_cls = self.dropout( attn_logits_others_to_cls.softmax(dim=-1) )                                          # (B, H, 1, S)
-            cls_out = (attn_others_to_cls @ v).reshape(batch_size, 1, self.num_heads * self.head_dim)                               # (B, H, 1, S) @ (B, H, S, D) -> (B, H, 1, D) -> (B, 1, E)
-
-            # Compute output
-            values += attn_cls_to_others @ cls_proj
-            # values.shape = (batch_size, num_heads, seq_len - 1, head_dim)
-            values = torch.cat( (cls_out ,values.transpose(1, 2).reshape(batch_size, seq_len - part_cls_bool, embed_dim)), dim = 1)
-            
+        # x shape: (B, S, D)
+        B, S, D = x.shape
+        
+        # 1. Handle CLS splitting logic
+        use_special = self.special_cls in ['partial_projection', 'full_projection', 'replace_attention']
+        
+        if use_special:
+            cls_token = x[:, 0:1, :] # (B, 1, D)
+            x_seq = x[:, 1:, :]      # (B, S-1, D)
         else:
-            values = values.transpose(1, 2).reshape(batch_size, seq_len, embed_dim)
+            x_seq = x
 
-        # x.shape = (batch_size, seq_len, embed_dim)
-        x = self.o_proj(values)     
+        # 2. Project Q, K, V for the sequence (others)
+        # Reshape to (B, H, S_seq, HeadDim)
+        target_seq_len = x_seq.shape[1]
+        
+        q = self.q_proj(x_seq).view(B, target_seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+        k = self.k_proj(x_seq).view(B, target_seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+        v = self.v_proj(x_seq).view(B, target_seq_len, self.num_heads, self.head_dim).transpose(1, 2)
 
-        return x, attn_standard
+        # 3. Standard Attention Logits (Alpha)
+        # qk_dot: (B, H, S, S)
+        qk_dot = q @ k.transpose(-2, -1)
+        
+        # Stability: Compute norms for scaling
+        # q_norm: (B, H, S, 1)
+        q_norm = torch.norm(q, p=2, dim=-1, keepdim=True).clamp(min=1e-5)
+        
+        # Logits = (q . k) / (sqrt(d) * |q|)
+        # This matches your implementation's logic
+        attn_logits_standard = qk_dot / (self.head_dim**0.5 * q_norm)
+        attn_standard = self.dropout(attn_logits_standard.softmax(dim=-1))
 
+        # 4. Compute Values
+        # If replacing, start with zeros, otherwise standard weighted sum
+        if self.special_cls == 'replace_attention':
+            values = torch.zeros_like(v)
+        else:
+            values = attn_standard @ v
+
+        # 5. Special Gamma Attention Logic
+        if use_special:
+            # -- Prepare Content Vector W_j --
+            if self.special_cls == 'full_projection':
+                # W_j = C(u_j)
+                w_j = self.cls_proj(x_seq).view(B, target_seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+            
+            elif self.special_cls == 'partial_projection':
+                # W_j = lambda * c + (1-lambda) * u_j
+                # Expand cls to sequence length
+                cls_expanded = cls_token.expand_as(x_seq)
+                w_j_raw = self.cls_ponderator * cls_expanded + (1 - self.cls_ponderator) * x_seq
+                w_j = w_j_raw.view(B, target_seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+            
+            else: # replace_attention (fallback to V or logic unclear in text, assuming V)
+                w_j = v 
+
+            # -- Compute Gamma Logits --
+            # Reference Gamma = Q(c)
+            c_vec = self.q_proj(cls_token).view(B, 1, self.num_heads, self.head_dim).transpose(1, 2) # (B, H, 1, D)
+            c_raw = cls_token.view(B, 1, self.num_heads, self.head_dim).transpose(1, 2)              # (B, H, 1, D)
+            
+            # Cosine Similarity between Gamma and q_i
+            # Dot: (B, H, 1, D) @ (B, H, D, S) -> (B, H, 1, S)
+            gamma_dot = c_vec @ q.transpose(-2, -1)
+            
+            # Norms
+            c_norm = torch.norm(c_vec, p=2, dim=-1, keepdim=True).clamp(min=1e-5) # (B, H, 1, 1)
+            
+            # FIX: Transpose gamma_dot to (B, H, S, 1) so it broadcasts over KEYS (columns)
+            # We want to scale the row i by cos(Gamma, q_i)
+            gamma_scaling = (gamma_dot.transpose(-2,-1)) / ( self.head_dim ** 0.5 * c_norm * q_norm)
+            
+            # Gamma logits = Alpha logits * Cosine(Gamma, q_i)
+            # Note: Alpha already includes division by q_norm inside attn_logits_standard
+            attn_logits_gamma = attn_logits_standard * gamma_scaling
+            
+            attn_gamma = self.dropout(attn_logits_gamma.softmax(dim=-1))
+            
+            # Add to values: sum(gamma * W_j)
+            values = values + (attn_gamma @ w_j)
+
+            # -- Update CLS Token itself (Standard Attention) --
+            # Query = c, Key = k_others
+            # c_vec is Q(c)
+            cls_logits = ( c_vec  @ k.transpose(-2, -1)) / (self.head_dim**0.5 * c_norm)
+            cls_weights = self.dropout(cls_logits.softmax(dim=-1))
+            cls_out = cls_weights @ v # (B, H, 1, D)
+            
+            # Reshape back
+            cls_out = cls_out.transpose(1, 2).reshape(B, 1, D)
+            seq_out = values.transpose(1, 2).reshape(B, target_seq_len, D)
+            
+            # Recombine
+            x_out = torch.cat([cls_out, seq_out], dim=1)
+
+        else:
+            # Standard output
+            x_out = values.transpose(1, 2).reshape(B, S, D)
+
+        return self.o_proj(x_out), attn_standard
+    
 class FeedForward(nn.Module):
     def __init__(self, hidden_size, mlp_hidden_size, hidden_size_out , quantum = True, U3_layers = False, entangling_layers = False, invert = True, entangle_method = 'CNOT',
                  train_q = True, dropout={'embedding_attn': 0.225, 'after_attn': 0.225, 'feedforward': 0.225, 'embedding_pos': 0.225}, q_stride = 4, graphs = 'chain'):
@@ -258,7 +322,7 @@ class FeedForward(nn.Module):
             self.vqc = nn.Linear(mlp_hidden_size, mlp_hidden_size)
 
         self.dropout = nn.Dropout(dropout['feedforward'])
-        self.gelu = nn.GELU()
+        self.gelu = TrainableGELU()
         self.q_stride = q_stride
         
 
@@ -267,7 +331,7 @@ class FeedForward(nn.Module):
 
         if self.q_stride == 1:
             x = self.fc1(x)
-            x = self.normalize(x)
+            x = self.normalize(x) # Add activation afterwards
             x = self.vqc(x)
             x = x.to(device)  # Ensure the output is on the same device as the input
             x = self.dropout(x)
@@ -496,6 +560,7 @@ class VisionTransformer(nn.Module):
         self.layer_norm = nn.LayerNorm(hidden_size // (RD**(num_transformer_blocks)))  # Normalization after the last transformer block
         print(f"QUANTUM CLASSIFICATION?: {self.quantum_classification}")
         self.linear = nn.Linear( (hidden_size // (RD**(num_transformer_blocks)) ) * parallel, num_classes)
+        self.blnorm = nn.LayerNorm(num_classes)
         self.linear2 = nn.Linear(num_classes,num_classes) if not self.quantum_classification else  QuantumLayer(num_qubits=num_classes, graphs = self.connectivity, invert = self.invert, train_q = self.train_q, U3_layers = self.U3_layers, entangling_layers = self.entangling_layers, entangle_method= self.entangle_method)
 
         if self.preprocessor == 'quantum':
@@ -736,12 +801,14 @@ class VisionTransformer(nn.Module):
     def forward(self, x):
 
         shape = x.shape
-
+        
         if self.patch_embedding_required == 'true':
             x = self.patch_embed_sample(x)
 
         elif self.patch_embedding_required == 'flatten':
-            x = x.view((x.shape[0], x.shape[1], -1))        
+            x = x.view((x.shape[0], x.shape[1], -1))   
+
+
         
         x = self.linear_after_patch_embedding(x)
 
@@ -791,6 +858,8 @@ class VisionTransformer(nn.Module):
 
         # Classification logits
         x = self.linear(x)
+        if self.quantum_classification:
+            x = self.blnorm(x)
         x = self.linear2(x)
 
         # x.shape = (batch_size, num_classes)
@@ -964,7 +1033,7 @@ class Decoder(nn.Module):
 class AutoEnformer(nn.Module):
             def __init__(self, img_size, num_channels, patch_size, hidden_size, num_heads, num_transformer_blocks ,mlp_hidden_size,
                               Attention_N = 2, dropout={'embedding_attn': 0.225, 'after_attn': 0.225, 'feedforward': 0.225, 'embedding_pos': 0.225}, channels_last=False, attention_selection='none', RD=1,
-                              q_stride = 1, parallel = 1):
+                              q_stride = 1, parallel = 1, special_cls = 'false'):
                 super(AutoEnformer, self).__init__()
 
                 self.channels_last = channels_last
@@ -973,8 +1042,10 @@ class AutoEnformer(nn.Module):
                 self.vallosslist = []
                 self.parallel = parallel
                 self.num_transformer_blocks = num_transformer_blocks
+                self.num_transformer_blocks = [num_transformer_blocks] if isinstance(num_transformer_blocks, int) else num_transformer_blocks
                 self.hidden_size = hidden_size
                 self.num_heads = num_heads
+                self.special_cls = special_cls
                 self.mlp_hidden_size = mlp_hidden_size
                 self.Attention_N = Attention_N
                 self.attention_selection = attention_selection
@@ -999,21 +1070,21 @@ class AutoEnformer(nn.Module):
                 self.encoder_layers = nn.ModuleList( [nn.ModuleList ([TransformerBlock_Attention_Chosen_QMLP(self.hidden_size // self.RD**i, self.num_heads, self.mlp_hidden_size, self.hidden_size // self.RD**(i + 1) , 
                                                                                                     Attention_N = self.Attention_N , quantum_mlp = False,
                                                                                                     dropout = self.dropout_values,
-                                                                                                    attention_selection = 'none',
+                                                                                                    attention_selection = 'none', special_cls = self.special_cls,
                                                                                                     q_stride = self.q_stride )
-                                                        for i in range(self.num_transformer_blocks)])  for j in range(self.parallel) ] )
+                                                        for i in range(self.num_transformer_blocks[0])])  for j in range(self.parallel) ] )
                 
                 self.decoder_layers = nn.ModuleList( [nn.ModuleList ([TransformerBlock_Attention_Chosen_QMLP(self.hidden_size // self.RD**i, self.num_heads, self.mlp_hidden_size, self.hidden_size // self.RD**(i + 1) ,
                                                                                             Attention_N = self.Attention_N , quantum_mlp = False,
                                                                                             dropout = self.dropout_values,
-                                                                                            attention_selection = 'none',
+                                                                                            attention_selection = 'none', special_cls = self.special_cls,
                                                                                             q_stride = self.q_stride )
-                                                        for i in range(self.num_transformer_blocks, 0, -1) ]) for j in range(self.parallel) ] )
+                                                        for i in range(self.num_transformer_blocks[1], 0, -1) ]) for j in range(self.parallel) ] )
                                         
                 self.Encoder = Encoder(self.encoder_layers, self.dropout)
                 self.Decoder = Decoder(self.decoder_layers, self.mlp_hidden_size, self.hidden_size)
 
-            def get_latent_representation(self, img):
+            def get_latent_representation(self, img, parallel_branch = 0):
 
                 # Check and handle channel-last format if needed
                 if self.channels_last:
@@ -1031,26 +1102,24 @@ class AutoEnformer(nn.Module):
 
                 outputs = []
 
-                for i in range(self.parallel):
-                    out = x_parallel[i]  # [B, S, D]
-
-                    for j in range(self.num_transformer_blocks - 1):
-                        out, _ = self.Encoder.encoder_layers[i][j](out)  # [B, S, D], attn: [B, H, S, S] or similar #type: ignore
-                    
-                    last_layer = self.Encoder.encoder_layers[i][-1]
-                    attn_input = last_layer.attn_norm(out)
-                    attn_output, attn_map = last_layer.attn(attn_input)
-                    attn_output = last_layer.attn_dropout(attn_output)
-                    out = out + attn_output
-
-                    y = last_layer.mlp_norm(out)
-                    mlp_out = last_layer.mlp_sel.fc1(y)
-                    mlp_out = last_layer.mlp_sel.vqc(mlp_out)
-                    mlp_out = mlp_out.to(y.device)  # Ensure the output is on the same device as the input
-                    mlp_out = last_layer.mlp_sel.dropout(mlp_out)
-                    outputs.append( last_layer.mlp_sel.gelu(mlp_out) )
                 
-                latent_representations =  torch.stack(outputs, dim=0)
+                out = x_parallel[parallel_branch]  # [B, S, D]
+
+                for j in range(self.num_transformer_blocks[0] - 1):
+                    out, _ = self.Encoder.encoder_layers[parallel_branch][j](out)  # [B, S, D], attn: [B, H, S, S] or similar #type: ignore
+                
+                last_layer = self.Encoder.encoder_layers[parallel_branch][-1]
+                attn_input = last_layer.attn_norm(out)
+                attn_output, attn_map = last_layer.attn(attn_input)
+                attn_output = last_layer.attn_dropout(attn_output)
+                out = out + attn_output
+
+                y = last_layer.mlp_norm(out)
+                mlp_out = last_layer.mlp_sel.fc1(y)
+                mlp_out = last_layer.mlp_sel.vqc(mlp_out)
+                mlp_out = mlp_out.to(y.device)  # Ensure the output is on the same device as the input
+            
+                latent_representations =  last_layer.mlp_sel.gelu(mlp_out)
 
                 return latent_representations  # Shape: (parallel, batch_size, num_patches + 1, mlp_hidden_size)
                     
@@ -1121,6 +1190,7 @@ class DeViT(nn.Module):
                 
                 assert x.shape[-1] == self.dim_latent, f"Input feature dimension ({x.shape[-1]}) does not match expected size ({self.dim_latent})"
                 x = self.dimension_adjustment(x)  
-            
-                return self.vit(x)  # Skip patch embedding in ViT
+                results = self.vit(x)[0]
+
+                return  results # Skip patch embedding in ViT
 

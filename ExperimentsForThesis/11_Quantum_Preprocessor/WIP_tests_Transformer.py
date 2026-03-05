@@ -35,29 +35,30 @@ if __name__ == "__main__":
         'q_config' : {'none'},
         'channels_last': False,
         'device': 'cuda:0' if torch.cuda.is_available() else 'cpu',
-        'second_at_a_time' : True,
+        'second_at_a_time' : False,
         'send_telegram': True,
         'verbose': True
     }
+    w = torch.pi/3
 
     p_base = {
         'patch_size': 4,
         'num_head': 16,
         'Attention_N': 2,
         'num_transf': 2,
-        'selection_amount': 25,
+        'selection_amount': 49,
         'special_cls': 'false',
-        'mlp_size': 5,
+        'mlp_size': 3,
         'quantum': False,
-        'train_q' : True,
+        'train_q' : False,
         'U3_layers' : 1,
         'entangling_layers' : 1,
-        'dropout': 0.225,
+        'dropout': 0.175,
         'parallel': 1,
         'attention_selection': 'filter',
         'RD': 1,
         'q_stride': 1,
-        'connectivity': ['chain', 'chain_reverse'],
+        'connectivity':  {'edges': [[0, 1], [1, 2], [2, 3], [3, 0], [0, 2], [1, 3]], 'weights': [w,w,w,w,w,w]},
         'learning_rate': 0.0025,
         'hidden_size': 48,          # Example, might be derived
         'weight_decay': 1e-7,
@@ -85,7 +86,7 @@ if __name__ == "__main__":
     }
 
     model_iter = {
-        'preprocessor' : ['quantum', 'classical', 'none']
+        'preprocessor' : [ 'quantum',  'classical', 'none' ]
     }
 
     graph_columns = ['preprocessor', 'test_auc']

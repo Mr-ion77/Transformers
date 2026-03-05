@@ -9,14 +9,13 @@ twox2measurers = [[3], [3, 2], [3, 2, 1], [3, 2, 1, 0]]
 # Hyperparams
 p1 = {
     '1_learning_rate': 0.0025, '1_hidden_size': 16*3, '1_dropout': 0.225,
-    '1_quantum' : False, '1_num_head': 4, '1_Attention_N' : 2, '1_num_transf': 2, '1_mlp_size': 4, '1_patch_size': 4, '1_weight_decay': 1e-5, '1_attention_selection': 'filter', 
+    '1_quantum' : False, '1_num_head': 4, '1_Attention_N' : 2, '1_num_transf': 1, '1_mlp_size': 20, '1_patch_size': 4, '1_weight_decay': 1e-5, '1_attention_selection': 'filter', 
     '1_selection_amount': 25, '1_RD': 1,  '1_special_cls' : 'none', '1_parallel': 1, '1_patience': -1, 
-    '1_scheduler_factor': 0.955, '1_q_stride': 1,  '1_augmentation_prob' : 0, '1_val_train_pond' : 1,
-    
+    '1_scheduler_factor': 0.955, '1_q_stride': 1,  '1_augmentation_prob' : 0, '1_val_train_pond' : 1
 }
 
 data = {
-    'connectivity' : 'chain' ,'entangle_method' : 'CRX', 'ancilla' : 0, 'channels_out' : [1], 'selection_amount': 25,
+    'connectivity' : 'chain' ,'entangle_method' : 'CRX', 'ancilla' : 0, 'channels_out' : [2], 'selection_amount': 25,
     'flatten_extra_channels' : False, 'quanv_kernel_size' : 2, 'invert_embedding' : False    
 }
 

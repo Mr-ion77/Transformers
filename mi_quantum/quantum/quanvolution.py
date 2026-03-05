@@ -53,12 +53,14 @@ class QuantumKernel(nn.Module):
         circuit_out = (1+self.circuit(x))/2 # Normalize between 0 and 1
 
         return circuit_out[...,  self.channels_out]
+
+        
     
 
 class QuantumConv2D(nn.Module):
     def __init__(self, kernel_size=3, stride=1, padding=0, channels_out = [4], channels_last = False, graphs= 'chain', 
                  entangle_method ='CNOT', ancilla = 1, pad_filler = 'median', invert_embedding = True, train_q = False,
-                 U3_layers = 0, entangling_layers = 1):
+                 U3_layers = 0, entangling_layers = 1, input_channels = 1):
         super().__init__()
 
         if ancilla and channels_out != [-1]:
@@ -87,6 +89,7 @@ class QuantumConv2D(nn.Module):
         # We'll perform median padding manually so set unfold padding to 0
         self.unfold = nn.Unfold(kernel_size=self.kernel_size, stride=self.stride, padding=0) # Unfold the input to get sliding local blocks
         self.channels_last = channels_last
+        self.input_channels = input_channels
 
     
 
@@ -96,11 +99,12 @@ class QuantumConv2D(nn.Module):
         """
 
         x = x if self.channels_last == False else x.permute(0, 3, 1, 2)
-
         if x.ndim == 4:
             B, C, H, W = x.shape 
         elif x.ndim == 3:
-            B, C, H, W = 1 , *x.shape
+            assert self.input_channels != None, f"When input.ndim == 3 the number of input_channels is necessary to avoid shape mismatch errors. "
+            B, C, H, W = x.shape[0], self.input_channels, x.shape[1], x.shape[2]
+            x = x.unsqueeze(1)
             
         q = len(self.channels_out) 
 
@@ -177,6 +181,7 @@ class Convolution2D(nn.Module):
         """
         x: (B, C, H, W) or (B, H, W, C) if channels_last is True
         """
+        print(f"x.shape: {x.shape}")
         # Handle channel ordering
         if self.channels_last:
             x = x.permute(0, 3, 1, 2)
@@ -221,11 +226,12 @@ class Convolution2D(nn.Module):
             full_out = full_out.view(B, C, self.q, H_out, W_out).permute(0, 2, 1, 3, 4).contiguous()
             return full_out.view(B, self.q * C, H_out, W_out)
         else:
+            print(f"C<=1")
             # Matches your return output[:,0,:,:] for single channel
             return outputs_by_channel[0][:, 0, :, :]
     
 class QuantumConv1D(nn.Module):
-    def __init__(self, window_size=3, stride=1, padding=0, channels_out = [4], graphs= 'chain', entangle_method = 'CNOT', ancilla = 1, pad_filler = 'median'):
+    def __init__(self, window_size=3, stride=1, padding=0, channels_out = [4], graphs= 'chain', entangle_method = 'CNOT', ancilla = 1, pad_filler = 'median', input_channels = None, transposeB = False):
         super().__init__()
 
         if ancilla and channels_out != [-1]:
@@ -253,72 +259,81 @@ class QuantumConv1D(nn.Module):
         self.ancilla = ancilla
         # We'll perform median padding manually so set unfold padding to 0
         self.unfold = nn.Unfold(kernel_size=(window_size, 1), stride=(stride, 1), padding=(0, 0)) # Unfold the input to get sliding local blocks
+        self.transposeB = transposeB
 
     def forward(self, x):
-        """
-        x: (B, C, L)
-        """
-        if x.dim() == 3:
-            B, C, L = x.shape 
-        elif x.dim() == 2:
-            B, L = x.shape 
-            C = 1
-            x = x.unsqueeze(1)
-        elif x.dim() == 4:
-            B, C, H, W = x.shape 
-            L = H
+        orig_dim = x.dim()
+        
+        # 1. Standardize to 4D: (B, C, H, W)
+        if orig_dim == 2:
+            B, L = x.shape
+            C, W = 1, 1
+            x = x.unsqueeze(1).unsqueeze(3) # (B, 1, L, 1)
+        elif orig_dim == 3:
+            B, C, L = x.shape
+            W = 1
+            x = x.unsqueeze(3) # (B, C, L, 1)
+        elif orig_dim == 4:
+            B, C, L, W = x.shape
+        else:
+            raise ValueError(f"Input must be 2D, 3D, or 4D. Got {orig_dim}D")
 
-        L_out = (L + self.padding['Up'] + self.padding['Down'] - self.window_size) // self.stride + 1
+        # 2. Handle Transpose
+        if self.transposeB:
+            # Swap L and W dimensions
+            x = x.transpose(-1, -2).contiguous()
+        
+        # Current shapes after potential transpose
+        B, C, L_curr, W_curr = x.shape
 
+        # 3. Calculate Output Length based on current 'L' (Height)
+        L_out = (L_curr + self.padding['Up'] + self.padding['Down'] - self.window_size) // self.stride + 1
         outputs_by_channel = []
 
         for channel in range(C):
-
-            # Prepare y as a 4-D tensor (B, 1, L, W) where W==1 for simple 1-D input
-            if x.dim() == 3:
-                # x: (B, C, L) -> y: (B, 1, L, 1)
-                y = x[:, channel, :].unsqueeze(1).unsqueeze(3)
-                B_loc = B
-                W = 1
-            else:
-                # x: (B, C, H, W) -> treat H as length L and process each column (W) separately
-                y = x[:, channel, :, :].unsqueeze(1)  # (B, 1, H, W)
-                B_loc = B
-                W = x.shape[3]
-
-            # Apply median padding manually along the length dimension (and width if applicable)
+            y = x[:, channel:channel+1, :, :] 
             y = custom_pad_2d(y, self.padding, self.pad_filler)
 
-            # Extract patches: (B, window_size * 1, L_out * W)
-            patches = self.unfold(y)  # (B, window_size, L_out * W)
-
-            # Reshape to separate column positions: (B, window_size, L_out, W)
-            patches = patches.view(B_loc, self.window_size, L_out, W)
-
-            # Move window dim to last so we can get (B, L_out, W, window_size)
-            patches = patches.permute(0, 2, 3, 1)  # (B, L_out, W, window_size)
-
-            # Flatten to (B * L_out * W, window_size) to batch through quantum kernel
-            patch_vectors =  patches.reshape(-1, patches.shape[-1])  # (B*L_out*W, window_size)
-
-            if patch_vectors.shape[1] + self.ancilla != self.kernel.circuit.num_qubits:
-                raise ValueError(f"Expected input dim {self.kernel.circuit.num_qubits - self.ancilla}, got {patch_vectors.shape[1]}")
-
-            # Process with the Kernel — batched over all patches and columns
-            kernel_out = self.kernel(patch_vectors)  # (B*L_out*W, D)
-
+            # Unfold extracts patches along the Height (L_curr)
+            patches = self.unfold(y) # (B, window_size, L_out * W_curr)
+            
+            # Reshape to (B, window_size, L_out, W_curr)
+            patches = patches.view(B, self.window_size, L_out, W_curr)
+            
+            # Permute to (B, L_out, W_curr, window_size) for the kernel
+            patches = patches.permute(0, 2, 3, 1).contiguous()
+            
+            patch_vectors = patches.view(-1, self.window_size)
+            kernel_out = self.kernel(patch_vectors) # (Total_Patches, D)
             D = kernel_out.shape[-1]
 
-            # Reshape back to (B, L_out, W, D)
-            kernel_out = kernel_out.view(B_loc, L_out, W, D)
-
-            # Move output channels to second dim: (B, D, L_out, W)
-            output = kernel_out.permute(0, 3, 1, 2).contiguous()
-
+            # Reshape to (B, L_out, W_curr, D) then permute to (B, D, L_out, W_curr)
+            output = kernel_out.view(B, L_out, W_curr, D).permute(0, 3, 1, 2).contiguous()
             outputs_by_channel.append(output)
 
-        # For 4-D input return (B, C*D, L_out, W)
-        return torch.cat(outputs_by_channel, dim=1) if C > 1 else output[:,0,:,:] # (B, C*D, L_out, W)
+        results = torch.cat(outputs_by_channel, dim=1) # (B, C*D, L_out, W_curr)
+
+        # 4. Consistent Dimensionality Reduction
+        # If we started with 3D (B, C, L), we expect (B, C*D, L_out)
+        if orig_dim == 3:
+            # If transposeB was True, L_out is now in the H position, W_curr is 1
+            # If transposeB was False, W_curr is 1
+            # We want to remove the '1' dimension without accidentally squeezing B or C*D
+            if self.transposeB:
+                # Result is (B, C*D, L_out, original_L) -> this doesn't happen in 1D conv 
+                # usually, but let's be safe:
+                return results.squeeze(-2) if results.shape[-2] == 1 else results
+            else:
+                return results.squeeze(-1) # Removes the W=1 dimension
+
+        # If we started with 2D (B, L), we likely want (B, L_out) or (B, D, L_out)
+        if orig_dim == 2:
+            results = results.squeeze(-1) # Remove W
+            if results.shape[1] == 1: # If only one output channel
+                return results.squeeze(1)
+            return results
+
+        return results
 
 
 

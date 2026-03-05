@@ -25,10 +25,10 @@ if __name__ == "__main__":
     # 1. Define Base Configs
     exp_config_base = {
         'experiment_id': 'transformer_results/ExperimentsForThesis/28x28/filter',
-        'experiment_name': 'Attention Filter or Not',
+        'experiment_name': '3_Filter',
         'B': 256,
         'N': 125, # Num epochs
-        'num_experiments': 30,
+        'num_experiments': 50,
         'num_classes': 7,
         'square' : False,
         'pixels' : 28,

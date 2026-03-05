@@ -20,6 +20,7 @@ import kornia.geometry.transform as T
 import kornia.constants as C
 from torch.optim.lr_scheduler import StepLR
 from torch.optim.lr_scheduler import ReduceLROnPlateau
+import pytorch_optimizer
 
 
 class CustomRotation(nn.Module):
@@ -216,24 +217,25 @@ def dict_to_filename(data):
 
 def train_and_evaluate(
     model: torch.nn.Module, train_dataloader: torch.utils.data.DataLoader, valid_dataloader: torch.utils.data.DataLoader,
-    test_dataloader: torch.utils.data.DataLoader, num_classes: int, num_epochs: int, device: torch.device, mapping: bool = False, 
+    test_dataloader: torch.utils.data.DataLoader, num_classes: int, num_epochs: int, device: torch.device, 
     learning_rate: float = 1e-4, wd: float = 1e-7, res_folder: str = "results_cc", parameters : dict = {}, verbose: int = 0, patience : int = -1, scheduler_factor : float = 0.98, 
-    autoencoder : bool = False, save_reconstructed_images : bool = False, augmentation_prob: float = 0.5, val_train_pond = 1) -> None:
+    mode : str = 'transformer', save_reconstructed_images : bool = False, augmentation_prob: float = 0.5, val_train_pond = 1, optimizer = "Adam") -> None:
     """Trains the given model on the given dataloaders for the given parameters"""
     start_event = torch.cuda.Event(enable_timing=True)
     end_event = torch.cuda.Event(enable_timing=True)
 
     start_event.record()
-    
+ 
     model = model.to(device)
-    model.trainlosslist = []
-    model.vallosslist = []
-    model.auclist = []
-    model.acclist = []
+    epochs_no_improve = 0
     best_y_true, best_y_pred, best_y_pred_prob = [], [], []
     save_string = dict_to_filename(parameters)
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=wd)
+    if optimizer == "Adam":
+        optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=wd)
+    elif optimizer == "SOAP":
+        optimizer = pytorch_optimizer.SOAP(model.parameters(), lr = learning_rate, weight_decay=wd)
+    
     # Definir el scheduler StepLR
     scheduler = StepLR(optimizer, step_size=1, gamma=scheduler_factor)  # Reduce LR cada 5 épocas por un factor de 0.1
 
@@ -241,7 +243,11 @@ def train_and_evaluate(
 
     print(f"Number of trainable parameters: {number_of_parameters}")
 
+    assert mode in ['transformer', 'autoencoder', 'selected'], f"Invalid mode '{mode}'. Expected one of: 'transformer', 'autoencoder', 'selected'."
+
     augmentation = augmentation_prob > 0
+    autoencoder = mode == 'autoencoder'
+    selected = mode == 'selected'
 
     if augmentation:
         aug_pipeline = nn.Sequential(
@@ -272,85 +278,59 @@ def train_and_evaluate(
             y_trueTr, y_predTr = [], []
             
             for inputs, labels, *ind in train_dataloader:
+                
+                # 1. Fast empty tensor check
+                assert inputs.numel() > 0, f"Input has zero dimension in shape {inputs.shape}"
 
-                nonzerodim = True
-                for d in inputs.shape:
-                    if d == 0:
-                        nonzerodim = False
-                        break
-                assert nonzerodim, f"Input has zero dimension in shape {inputs.shape}"
-
-                inputs, labels = inputs.to(device), labels.to(device) 
+                # 2. Asynchronous transfer (Make sure your dataloader has pin_memory=True)
+                inputs = inputs.to(device, non_blocking=True)
+                labels = labels.to(device, non_blocking=True) 
+                
+                # NOTE: Move the label casting/squeezing to your Dataset's __getitem__ 
+                # to avoid doing this here. If you can't, leave it here for now, but fix it later.
                 if not autoencoder:               
-                    if num_classes == 2:
-                        labels = labels.float()
-                    else:
-                        labels = labels.long()
-
+                    labels = labels.float() if num_classes == 2 else labels.long()
                     labels = labels.squeeze(1) if labels.dim() > 1 else labels
 
-                operation_start_time = time.time()
+                optimizer.zero_grad(set_to_none=True) # set_to_none=True is faster than default zeroing
 
-                optimizer.zero_grad()
-
-                if verbose == -1:
-                    print(f" Zero grad ({time.time()-operation_start_time:.2f}s)")
-                    operation_start_time = time.time()
-
-                # Inputs shape is either (B, C, H, W) or (B, S, C, P, P)    S= seq_len, P=patch_size
+                # 3. Augmentation handling
                 if augmentation:
-
                     D = inputs.ndim
                     if D == 5:
                         B, S, C, H, W = inputs.shape
-                        inputs = inputs.view( (B*S, C, H, W) )
+                        inputs = inputs.view((B * S, C, H, W))
                     
                     inputs = aug_pipeline(inputs)
 
                     if D == 5:
-                        inputs = inputs.view( (B, S, C, H, W) )
-        
-                
-                outputs = model(inputs)
+                        inputs = inputs.view((B, S, C, H, W))
 
-                outputs = outputs[0] if isinstance(outputs, tuple) or isinstance(outputs, list) else outputs  # Get only the outputs, not the attentions
+                outputs = model(inputs)
+                outputs = outputs[0] if isinstance(outputs, (tuple, list)) else outputs
 
                 if num_classes == 2 and outputs.shape[1] == 2:
                     outputs = outputs[:, 1]
 
-                if verbose == -1:
-                    print(f" Forward ({time.time()-operation_start_time:.2f}s)")
-                    operation_start_time = time.time()
                 if not autoencoder:
                     loss = criterion(outputs, labels)
                 else:
                     loss = criterion(outputs, inputs)
 
-                if verbose == -1:
-                    print(f" Loss ({time.time()-operation_start_time:.2f}s)")
-                    operation_start_time = time.time()
-
                 loss.backward()
-
-                if verbose == -1:
-                    print(f" Backward ({time.time()-operation_start_time:.2f}s)")
-                    operation_start_time = time.time()
-
                 optimizer.step()
 
-                if verbose == -1:
-                    print(f" Optimizer step ({time.time()-operation_start_time:.2f}s)")
-
+                train_loss += loss.item()
                 step += 1
                 progress_bar.update(1)
 
-                train_loss += loss.item()
+                # 4. Efficient metric collection
                 if not autoencoder:
-                    probabilities = torch.sigmoid(outputs) if num_classes == 2 else torch.softmax(outputs, dim=1)
-
-                    y_trueTr.extend(labels.tolist())
-                    y_predTr.extend(probabilities.tolist())
-                
+                    with torch.no_grad():
+                        probabilities = torch.sigmoid(outputs) if num_classes == 2 else torch.softmax(outputs, dim=1)
+                        y_trueTr.extend(labels.detach().cpu().tolist())
+                        y_predTr.extend(probabilities.detach().cpu().tolist())
+                        
             train_loss /= len(train_dataloader) 
             if not autoencoder:
                 tr_auc = 100.0 * roc_auc_score(y_trueTr, y_predTr, multi_class='ovr')
@@ -388,6 +368,7 @@ def train_and_evaluate(
                         y_predVal.extend(probabilities.tolist())
 
             val_loss /= len(valid_dataloader)
+
             if not autoencoder:
                 val_auc = (100.0 * roc_auc_score(y_trueVal, y_predVal, multi_class='ovr'))* val_train_pond + tr_auc * (1-val_train_pond)
 
@@ -472,10 +453,13 @@ def train_and_evaluate(
         })
 
     else:
-        df = pd.DataFrame({
-            'trainlosslist': model.trainlosslist,
-            'vallosslist': model.vallosslist
-        })
+        try:
+            df = pd.DataFrame({
+                'trainlosslist': model.trainlosslist,
+                'vallosslist': model.vallosslist
+            })
+        except Exception as e:
+            print(f"Error creating DataFrame: {e}")
 
     df.to_csv(f'{res_folder}/Training_' + save_string + '.csv', index=False)
 
@@ -494,18 +478,30 @@ def train_and_evaluate(
 
     model.load_state_dict(torch.load(f'{res_folder}/model_weights_val_' + save_string + '.pth', weights_only=True))
 
-    # Evaluación en el conjunto de prueba
     model.eval()
+    mse_list = []
     y_true, y_pred, images = [], [], []
+    
     with torch.no_grad():
-        for inputs, labels, ind in test_dataloader:
+        for inputs, labels, *ind in test_dataloader: # Re-added *ind to prevent unpacking crashes
+            inputs = inputs.to(device)
+            # You don't need to process labels here for an autoencoder, so skip it to save time
+            
+            outputs = model(inputs)  
+            outputs = outputs[0] if isinstance(outputs, (tuple, list)) else outputs  
+            if autoencoder:
+                # Calculate MSE per image directly on the GPU using PyTorch
+                batch_mse = ((inputs - outputs) ** 2).mean(dim=(-3, -2, -1))
+                
+                # Move the results to CPU and append to your list
+                mse_list.extend(batch_mse.cpu().tolist())
+            
+            # Handle your image indices
+            if ind:
+                images.extend(ind[0].tolist() if isinstance(ind[0], torch.Tensor) else ind[0])
 
-            inputs, labels = inputs.to(device), labels.to(device)
             labels = labels.float() if num_classes == 2 else labels.long()
             labels = labels.squeeze(1) if labels.dim() > 1 else labels
-
-            outputs = model(inputs)  # Get only the outputs, not the attentions
-            outputs = outputs[0] if isinstance(outputs, tuple) or isinstance(outputs, list) else outputs  # Get only the outputs, not the attentions
 
             if save_reconstructed_images and autoencoder and epoch == num_epochs - 1:
 
@@ -539,9 +535,6 @@ def train_and_evaluate(
                 y_true.extend(labels.tolist())
                 y_pred.extend(probabilities.tolist())
 
-            images.extend(ind.tolist() if isinstance(ind, torch.Tensor) else ind)
-
-    
     if not autoencoder:
         # Cálculo de AUC y precisión
         test_auc = 100.0 * roc_auc_score(y_true, y_pred, multi_class='ovr')
@@ -549,71 +542,34 @@ def train_and_evaluate(
         test_acc = 100.0 * accuracy_score(y_true, y_pred_array)
     
         # Guardar resultados
-        df = pd.DataFrame({
-            'Images': images,
+        results_dict = {
             'True Labels': y_true,
             'Predictions': y_pred_array,
             'Predicted Probabilities': y_pred
-        })
+        }
+        
+        # Only add the 'Images' column if we actually collected indices
+        if len(images) == len(y_true):
+            results_dict['Images'] = images
+        elif len(images) > 0:
+            print(f"Warning: Collected {len(images)} images but have {len(y_true)} labels. Ignoring images column.")
+            
+        df = pd.DataFrame(results_dict)
 
         print(f"TEST AUC: {test_auc:.2f}%, TEST ACC: {test_acc:.2f}%")
 
     else:
-        mse = np.mean((np.array(inputs.cpu()) - np.array(outputs.cpu()))**2, )
-        df = pd.DataFrame({
-            'Images': images,
-            'mse': mse
-        })
+        mse = np.mean(mse_list)
+        results_dict = {'mse': mse_list} # Note: You previously passed `mse` (a float) here instead of the list!
+        if len(images) == len(mse_list):
+            results_dict['Images'] = images
+            
+        df = pd.DataFrame(results_dict)
 
         print(f"TEST MSE: {mse:.4f}")
 
     df.to_csv(f'{res_folder}/predictions_test_' + save_string + '.csv', index=False)
     
-    ## Saving attention maps   
-    if mapping:
-        # Create directories for misclassified images
-        train_misclassified_dir = f'{res_folder}/train_misclassified'
-        test_misclassified_dir = f'{res_folder}/test_misclassified'
-        
-        try:
-            os.makedirs(f'{res_folder}/train')
-            os.makedirs(f'{res_folder}/test')
-            for i in range(num_classes):
-                os.makedirs(f'{res_folder}/train/class{i}')
-                os.makedirs(f'{res_folder}/test/class{i}')
-
-            os.makedirs(train_misclassified_dir)
-            os.makedirs(test_misclassified_dir)
-            for i in range(num_classes):
-                os.makedirs(f'{train_misclassified_dir}/class{i}')
-                os.makedirs(f'{test_misclassified_dir}/class{i}')
-        except OSError as e:
-            if e.errno != errno.EEXIST:
-                raise
-        
-        valid_dataloader_single = torch.utils.data.DataLoader(valid_dataloader.dataset, batch_size=1)
-        for images, labels, names in valid_dataloader_single:
-            images, labels = images.to(device), labels.to(device)
-            dir = f'{res_folder}/test/class'+str(int(labels))+'/image'+str(int(names)).zfill(4)
-            dir_misclassified_test = f'{test_misclassified_dir}/class'+str(int(labels))+'/image'+str(int(names)).zfill(4)
-            with torch.no_grad():
-                pred = model(images)[0]  # Get both outputs and attentions
-                if res_folder == "results_qc" or res_folder == "results_qq":
-                    images = images.permute(0, 3, 1, 2)
-                    images = images[:, 0:1, :, :]
-                save_attention(pred, images, dir,patch_size)  # Pass attentions instead of pred
-                # Find misclassified samples
-                if (num_classes == 2 and pred.shape[1]==2):
-                    pred2 = pred[:,1]
-
-                else:
-                    pred2 = pred
-                probs = torch.sigmoid(pred2) if num_classes == 2 else torch.softmax(pred2, dim=1)
-                pred2 = [value >= 0.5 for value in probs] if num_classes == 2 else torch.argmax(probs, dim=1)
-                misclassified = pred2[0] != labels.squeeze().bool()
-                if misclassified:
-                    save_attention(pred, images, dir_misclassified_test,patch_size)  # Use attention for misclassified
-
     if hasattr( model , "_volution"):
         weights_dict = model._volution.state_dict()
         print(f"\n\n_Volution weights after training: {weights_dict}\n\n")
