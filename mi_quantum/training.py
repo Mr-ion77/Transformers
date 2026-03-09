@@ -246,6 +246,9 @@ def train_and_evaluate(
     assert mode in ['transformer', 'autoencoder', 'selected'], f"Invalid mode '{mode}'. Expected one of: 'transformer', 'autoencoder', 'selected'."
 
     augmentation = augmentation_prob > 0
+    print("="*50)
+    print(f"Using augmentation: {augmentation} with probability {augmentation_prob}")
+    print("="*50)
     autoencoder = mode == 'autoencoder'
     selected = mode == 'selected'
 

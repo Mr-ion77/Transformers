@@ -540,7 +540,7 @@ class VisionTransformer(nn.Module):
             kernel_size=patch_size,
             stride=patch_size
         )
-        self.linear_after_patch_embedding = nn.Linear(hidden_size, hidden_size)
+        self.linear_after_patch_embedding = nn.Linear(self.starting_dim, hidden_size)
 
         self.cls_token = nn.Parameter(torch.zeros(1, 1, hidden_size))
         self.num_steps = 1 + self.num_patches

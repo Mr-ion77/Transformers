@@ -78,6 +78,7 @@ model_map = {
             'entangle_method': 'entangle_method',
             'invert_embedding': 'invert_embedding',
             'RD': 'RD',
+            'dropout': 'dropout',
             'attention_selection': 'attention_selection',
             'selection_amount': 'selection_amount',
             'special_cls': 'special_cls',
@@ -86,7 +87,8 @@ model_map = {
             'connectivity': 'connectivity',
             'quantum_classification' : 'quantum_classification',
             'train_q' : 'train_q',
-            'preprocessor' : 'preprocessor'
+            'preprocessor' : 'preprocessor',
+            'hidden_size' : 'hidden_size',
 }
 
 train_map = {
@@ -428,6 +430,7 @@ def make_experiment_transformer(exp_config, p_base, all_iter={}, data_iter = {},
                 p1 = p_master,
                 num_channels = num_channels,
                 device = exp_config['device'],
+                flatten_extra_channels = exp_config.get('augmenting', False),
                 concatenate_original = exp_config.get('concatenate_original', False)
             )
 

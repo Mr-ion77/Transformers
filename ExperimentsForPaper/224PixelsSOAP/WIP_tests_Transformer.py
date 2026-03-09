@@ -38,13 +38,13 @@ if __name__ == "__main__":
         'B'                     : 256,
         'special_batch_for_data': False,
         'rewind_channels'       : False,
-        'N'                     : 125,
+        'N'                     : 100,
         'N2'                    : 30,
         'q_config'              : {'none'},
         'device'                : torch.device("cuda:0" if torch.cuda.is_available() else "cpu"),
         'second_at_a_time'      : False,
-        'augmenting'            : True,
-        'concatenate_original'  : True,
+        'augmenting'            : False,
+        'concatenate_original'  : False,
         'verbose'               : True,
         'optimizer'             : 'SOAP',
         
@@ -53,17 +53,17 @@ if __name__ == "__main__":
     graph = [ [0, 1], [1, 2], [2, 3], [3, 0], [0, 4], [1, 4], [2, 4], [3, 4] ]
 
     p_base = {
-        'learning_rate': 0.0015, 'hidden_size': 14*14*3, 'dropout': 0.285,
+        'learning_rate': 0.0015, 'hidden_size': 16*16*3, 'dropout': 0.225,
         'quantum' : False, 'num_head': 16, 'Attention_N' : 2, 'num_transf': 2, 'mlp_size': 5, 'patch_size': 16, 'weight_decay': 1e-7, 'attention_selection': 'filter', 
-        'selection_amount': 90, 'RD': 1, 'connectivity' : 'chain' ,'entangle_method' : 'CRX', 'special_cls' : 'none', 'parallel': 1, 'patience': -1, 
-        'scheduler_factor': 0.955, 'q_stride': 4, 'ancilla' : 1, 'channels_out' : [4, 0, 1, 2, 3], 'augmentation_prob' : 1, 'val_train_pond' : 1,
+        'selection_amount': 90, 'connectivity' : 'chain' ,'entangle_method' : 'CRX', 'special_cls' : 'false', 'parallel': 1, 'patience': -1, 
+        'scheduler_factor': 0.955, 'q_stride': 1, 'ancilla' : 1, 'channels_out' : [4], 'augmentation_prob' : 0, 'val_train_pond' : 1, 'RD' : 1,
         'flatten_extra_channels' : False, 'quanv_kernel_size' : 2,
         'stride' : 1,
         'channels_out' : [1],
         'ancilla': 0,
         'graphs' : 'star',
         'entangle_method' : 'CNOT',
-        'invert_embedding' : False
+        'invert_embedding' : True
     }
 
     # 2. Define Iterables
@@ -79,7 +79,7 @@ if __name__ == "__main__":
         
     }
 
-    graph_columns = ['test_auc']
+    graph_columns = ['q_config','test_auc']
 
     # 3. Run Experiment
     print("--- Starting Refactored Transformer Experiment ---")

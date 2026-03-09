@@ -36,23 +36,29 @@ class MinMaxScalePerChannel:
 
 
 class RandomRotationChannelWiseMedian:
-    def __init__(self, degrees):
+    def __init__(self, degrees, channels_last = True):
         if isinstance(degrees, (int, float)):
             self.degrees = (-degrees, degrees)
         else:
             self.degrees = degrees
+        self.channels_last = channels_last
 
     def __call__(self, img):
         # Convert to numpy to calculate medians
         img_np = np.array(img)
+        # Use float for float-valued tensors (range [0,1]), int for uint8 images (range [0,255])
+        cast = float if img_np.dtype.kind == 'f' else int
         
         if img_np.ndim == 2:
             # Grayscale: shape is (H, W)
-            fill_values = int(np.median(img_np))
+            fill_values = cast(np.median(img_np))
         elif img_np.ndim == 3:
-            # RGB/Multichannel: shape is (H, W, C)
+            # RGB/Multichannel: shape is (H, W, C) or (C, H, W)
             # Calculate median for each channel independently
-            fill_values = tuple(int(np.median(img_np[:, :, i])) for i in range(img_np.shape[2]))
+            if self.channels_last:
+                fill_values = tuple(cast(np.median(img_np[:, :, i])) for i in range(img_np.shape[2]))
+            else:
+                fill_values = tuple(cast(np.median(img_np[i, :, :])) for i in range(img_np.shape[0]))
         else:
             fill_values = 0 # Fallback
 
@@ -200,7 +206,7 @@ def get_medmnist_dataloaders(pixel: int = 28, data_flag: str = 'breastmnist', ex
 # Function for: Quantum preprocessed datasets
 
 q_train_transforms = transforms.Compose([
-        transforms.RandomRotation(90),
+        RandomRotationChannelWiseMedian(90, channels_last=False),
         transforms.RandomHorizontalFlip(),
         transforms.RandomVerticalFlip(),
     ])
@@ -245,7 +251,7 @@ def load_numpy_data(data_dir, channels_last=True):
     return (train_images, train_labels), (val_images, val_labels), (test_images, test_labels)
 
 
-def create_dataloaders(data_dir, batch_size=32, channels_last=True, shuffle=True, tensors=None, transforms={'train': q_train_transforms, 'val': q_valid_transforms, 'test': q_valid_transforms}):
+def create_dataloaders(data_dir, batch_size=32, channels_last=True, shuffle=True, tensors=None, transforms={'train': q_train_transforms, 'val': q_valid_transforms, 'test': q_valid_transforms}, num_workers=0, pin_memory=False):
     if tensors is not None:
         train_tensor, val_tensor, test_tensor = tensors
     else:
@@ -258,9 +264,9 @@ def create_dataloaders(data_dir, batch_size=32, channels_last=True, shuffle=True
     test_dataset = TransformedTensorDataset(test_tensor, transform=transforms['test'])
 
     # Create loaders
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=shuffle)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
-    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers, pin_memory=pin_memory)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=pin_memory)
+    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=pin_memory)
 
     # train_tensor[0] is the entire images block of shape [N, C, H, W]. 
     # .shape[1:] returns [C, H, W] safely.
@@ -409,8 +415,12 @@ def preprocess_and_save(
             channels_last=channels_last,
             tensors=current_kernels_tensors,
             transforms={'train': q_train_transforms, 'val': None, 'test': None},
-            shuffle=False
+            shuffle=True,
+            num_workers=4,
+            pin_memory=True
         )
+        print(f"Created dataloaders for kernel '{dataset_name_suffix}' with {len(Quantums[0].dataset)} training samples, {len(Quantums[1].dataset)} validation samples, and {len(Quantums[2].dataset)} test samples.")
+        print(f"Sample shapes for kernel '{dataset_name_suffix}':\n - Train: {Quantums[-1]}")
 
         splits = ['train', 'val', 'test']
         for split_idx, split_name in enumerate(splits):
@@ -493,7 +503,9 @@ def cut_extra_channels_from_latents(Latents, i, channels_out):
         channels_last=False,
         tensors=new_patchwise_tensors, # Pass the raw tensors
         transforms={'train': train_transforms, 'val': None, 'test': None},
-        shuffle=False
+        shuffle=True,
+        num_workers=4,
+        pin_memory=True
     ) 
 
     NewLatents = {
